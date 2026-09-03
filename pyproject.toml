@@ -61,6 +61,7 @@ select = ["ALL"]
 ignore = [
   "COM812", # trailing comma, owned by the formatter
   "CPY001", # per-file copyright header, LICENSE already covers this
+  "D107",   # the class docstring documents construction, per the google convention
   "ISC001", # implicit string concat, owned by the formatter
 ]
 
@@ -68,9 +69,10 @@ ignore = [
 # Assertions are the point of a test, and bare integers in assertions are clearer
 # than named constants.
 "tests/**/*.py" = ["D103", "PLR2004", "S101"]
-# Not importable packages, and they are allowed to print.
-"benchmarks/**/*.py" = ["INP001", "T201"]
-"scripts/**/*.py" = ["INP001", "T201"]
+# Not importable packages, they are allowed to print, and they seed a plain
+# random generator on purpose so their synthetic data is reproducible.
+"benchmarks/**/*.py" = ["INP001", "S311", "T201"]
+"scripts/**/*.py" = ["INP001", "S311", "T201"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

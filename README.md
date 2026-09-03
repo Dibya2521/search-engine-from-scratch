@@ -20,7 +20,7 @@ Under active development.
 | Stopword filtering | not started |
 | Porter stemmer | done |
 | Corpus parser | not started |
-| Inverted index with positions | not started |
+| Inverted index with positions | done |
 | Index persistence | not started |
 | One-word and free-text queries | not started |
 | Phrase queries | not started |
@@ -90,6 +90,7 @@ scripts/             corpus preparation utilities
 
 - [Tokenization](docs/01-tokenization.md)
 - [Stemming](docs/02-stemming.md)
+- [The inverted index](docs/03-inverted-index.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 
 ## Acknowledgements
