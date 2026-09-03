@@ -33,6 +33,7 @@ search-engine = "search_engine.cli:main"
 [dependency-groups]
 dev = [
   "hypothesis>=6.120",
+  "nltk>=3.9",
   "pre-commit>=4.0",
   "pylint>=3.3",
   "pyright>=1.1.390",

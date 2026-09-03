@@ -18,7 +18,7 @@ Under active development.
 | --- | --- |
 | Tokenizer | done |
 | Stopword filtering | not started |
-| Porter stemmer | not started |
+| Porter stemmer | done |
 | Corpus parser | not started |
 | Inverted index with positions | not started |
 | Index persistence | not started |
@@ -34,7 +34,7 @@ Under active development.
    the standard library fell short.
 2. **Development dependencies are unrestricted**, and are used as verification
    instruments rather than implementation shortcuts. The clearest case: the
-   from-scratch Porter stemmer will be tested against an independent
+   from-scratch Porter stemmer is verified against an independent
    implementation as a differential oracle, so a disagreement falsifies this
    code rather than confirming it.
 3. **Every claim carries a measurement.** Index sizes, build times and query
@@ -89,6 +89,7 @@ scripts/             corpus preparation utilities
 ## Documentation
 
 - [Tokenization](docs/01-tokenization.md)
+- [Stemming](docs/02-stemming.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 
 ## Acknowledgements

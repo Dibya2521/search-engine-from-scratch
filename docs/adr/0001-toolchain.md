@@ -38,7 +38,7 @@ else was available, and the fact that settled it.
   justified by a measurement rather than an assumption about speed.
 
 Development and test dependencies are deliberately unrestricted, because their
-job is verification rather than implementation. `nltk` will be used in tests
+job is verification rather than implementation. `nltk` is used in tests
 only, as a differential oracle against the from-scratch stemmer.
 
 ## Decision 2: uv for environments and locking
