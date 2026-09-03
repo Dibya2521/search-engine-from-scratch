@@ -92,8 +92,7 @@ max-line-length = 88
 max-args = 5
 max-locals = 12
 max-statements = 25
-# Encodes the two-levels-of-nesting rule from CODING_RULES.md section 3 rule 8:
-# one function body plus two nested blocks.
+# One function body plus two nested blocks.
 max-nested-blocks = 3
 
 [tool.pylint.messages_control]
