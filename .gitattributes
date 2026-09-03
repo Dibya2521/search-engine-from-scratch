@@ -1,0 +1,3 @@
+# Normalise to LF in the repository regardless of the checkout platform, so a
+# Windows working tree does not produce line-ending-only diffs.
+* text=auto eol=lf

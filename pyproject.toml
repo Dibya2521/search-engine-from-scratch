@@ -1,0 +1,142 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "search-engine-from-scratch"
+description = "An inverted-index search engine built from scratch on the Python standard library."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dibya2521" }]
+keywords = ["information-retrieval", "inverted-index", "search-engine", "tf-idf"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Text Processing :: Indexing",
+  "Typing :: Typed",
+]
+dynamic = ["version"]
+
+# Empty by design. The runtime is standard library only, because building the
+# mechanisms is the point of this project. See docs/adr/0001-toolchain.md.
+dependencies = []
+
+[project.scripts]
+search-engine = "search_engine.cli:main"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.120",
+  "pre-commit>=4.0",
+  "pylint>=3.3",
+  "pyright>=1.1.390",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+]
+
+[tool.hatch.version]
+path = "src/search_engine/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/search_engine"]
+
+# ---------------------------------------------------------------------------
+# ruff: primary linter and the only formatter
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # trailing comma, owned by the formatter
+  "CPY001", # per-file copyright header, LICENSE already covers this
+  "ISC001", # implicit string concat, owned by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Assertions are the point of a test, and bare integers in assertions are clearer
+# than named constants.
+"tests/**/*.py" = ["D103", "PLR2004", "S101"]
+# Not importable packages, and they are allowed to print.
+"benchmarks/**/*.py" = ["INP001", "T201"]
+"scripts/**/*.py" = ["INP001", "T201"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# pylint: kept alongside ruff only for the design and duplication checks that
+# ruff does not implement. Everything ruff already owns is disabled below.
+# ---------------------------------------------------------------------------
+[tool.pylint.main]
+py-version = "3.12"
+jobs = 0
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint.design]
+max-args = 5
+max-locals = 12
+max-statements = 25
+# Encodes the two-levels-of-nesting rule from CODING_RULES.md section 3 rule 8:
+# one function body plus two nested blocks.
+max-nested-blocks = 3
+
+[tool.pylint.messages_control]
+disable = [
+  "line-too-long",              # ruff E501
+  "missing-class-docstring",    # ruff D101
+  "missing-function-docstring", # ruff D103
+  "missing-module-docstring",   # ruff D100
+  "missing-final-newline",      # ruff W292
+  "too-few-public-methods",     # noisy on deliberate data holders
+  "trailing-whitespace",        # ruff W291
+  "unused-import",              # ruff F401
+  "unused-variable",            # ruff F841
+  "wrong-import-order",         # ruff I001
+  "wrong-import-position",      # ruff E402
+]
+
+# ---------------------------------------------------------------------------
+# pyright: strict, because an unchecked type is an unverified assumption
+# ---------------------------------------------------------------------------
+[tool.pyright]
+include = ["src", "tests", "scripts", "benchmarks"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+# ---------------------------------------------------------------------------
+# pytest and coverage
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+# A warning is a defect that has not been diagnosed yet.
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["search_engine"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", 'if __name__ == "__main__":']
