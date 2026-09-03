@@ -1,0 +1,211 @@
+"""Tests for query parsing and execution.
+
+Property tests build their queries from the *raw* tokens of a document, never
+from terms read back out of the index. That distinction is the contract:
+analysis runs exactly once on each side, on the original text. Feeding a stored
+term back in analyses it a second time, and stemming is not idempotent, so the
+term can change. A property test found this the hard way, and
+``test_a_term_read_back_from_the_index_is_not_a_valid_query`` pins it.
+"""
+
+from __future__ import annotations
+
+import itertools
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
+from search_engine.analysis import analyze
+from search_engine.index import InvertedIndex
+from search_engine.query import Query, parse, search
+from search_engine.tokenizer import tokenize
+
+
+def _index_of(texts: list[str]) -> InvertedIndex:
+    index = InvertedIndex()
+    for document_id, text in enumerate(texts):
+        index.add_document(document_id, text)
+    return index
+
+
+def _raw_tokens(texts: list[str]) -> list[str]:
+    return [token for text in texts for token in tokenize(text)]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("computer", Query(terms=("comput",), is_phrase=False)),
+        ("Computer SCIENCE", Query(terms=("comput", "scienc"), is_phrase=False)),
+        ('"computer science"', Query(terms=("comput", "scienc"), is_phrase=True)),
+        ('"computer"', Query(terms=("comput",), is_phrase=True)),
+        ("", Query(terms=(), is_phrase=False)),
+        ("   ", Query(terms=(), is_phrase=False)),
+        ('""', Query(terms=(), is_phrase=True)),
+        ('"', Query(terms=(), is_phrase=False)),
+    ],
+)
+def test_parsing(text: str, expected: Query) -> None:
+    assert parse(text) == expected
+
+
+@pytest.mark.parametrize("text", ['computer "science"', '"computer" science'])
+def test_a_partly_quoted_query_is_not_a_phrase(text: str) -> None:
+    """Mixing a phrase with loose terms is unsupported, so quotes just separate."""
+    assert parse(text) == Query(terms=("comput", "scienc"), is_phrase=False)
+
+
+def test_query_terms_are_stemmed_like_documents(phrase_index: InvertedIndex) -> None:
+    """`searching` finds a document that says `search`, which is the point."""
+    assert search(phrase_index, "searching") == {4}
+    assert search(phrase_index, "engines") == {2, 4}
+
+
+def test_a_term_read_back_from_the_index_is_not_a_valid_query() -> None:
+    """Query with language, never with a term taken out of the index.
+
+    Stemming is not idempotent, so analysing a stored term a second time can
+    change it. Here `A0SE` is stored as `a0s`, and querying `a0s` analyses to
+    `a0`, which matches nothing. Found by a property test rather than reasoning.
+    """
+    index = InvertedIndex()
+    index.add_document(1, "A0SE")
+    assert set(index.terms) == {"a0s"}
+    assert search(index, "A0SE") == {1}
+    assert search(index, "a0s") == set[int]()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("computer", {1, 2, 3, 5}),
+        ("science", {1, 2, 3, 5}),
+        ("index", {4}),
+        ("nonexistent", set[int]()),
+        ("", set[int]()),
+    ],
+)
+def test_one_word_queries(
+    phrase_index: InvertedIndex, text: str, expected: set[int]
+) -> None:
+    assert search(phrase_index, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("computer web", {1, 2, 3, 4, 5}),
+        ("index courses", {1, 4}),
+        ("nonexistent alsomissing", set[int]()),
+        ("index nonexistent", {4}),
+    ],
+)
+def test_free_text_queries_union_their_terms(
+    phrase_index: InvertedIndex, text: str, expected: set[int]
+) -> None:
+    """Any term is enough, so more terms can only widen the result."""
+    assert search(phrase_index, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('"computer science"', {1, 3, 5}),
+        ('"computer science department"', {1}),
+        ('"department computer"', set[int]()),
+        ('"computer"', {1, 2, 3, 5}),
+        ('""', set[int]()),
+        ('"computer nonexistent"', set[int]()),
+    ],
+)
+def test_phrase_queries_require_adjacency_in_order(
+    phrase_index: InvertedIndex, text: str, expected: set[int]
+) -> None:
+    assert search(phrase_index, text) == expected
+
+
+def test_a_phrase_excludes_documents_holding_the_terms_apart(
+    phrase_index: InvertedIndex,
+) -> None:
+    """Document 2 has both words, but reversed and with `and` between them."""
+    assert 2 in search(phrase_index, "computer science")
+    assert 2 not in search(phrase_index, '"computer science"')
+
+
+def test_term_order_matters_to_a_phrase(phrase_index: InvertedIndex) -> None:
+    """Document 5 repeats the pair, so it contains both orders."""
+    assert search(phrase_index, '"science computer"') == {5}
+    assert search(phrase_index, '"computer science"') == {1, 3, 5}
+
+
+def test_a_single_term_phrase_behaves_like_a_one_word_query(
+    phrase_index: InvertedIndex,
+) -> None:
+    assert search(phrase_index, '"computer"') == search(phrase_index, "computer")
+
+
+def test_a_long_phrase_gives_up_as_soon_as_two_terms_are_not_adjacent() -> None:
+    """Every term is present, and a later pair adjoins, but the first pair does not.
+
+    This is the case the early exit exists for: once the overlap empties there
+    is no point building the remaining position sets.
+    """
+    index = InvertedIndex()
+    index.add_document(1, "alpha zzz beta gamma")
+    assert search(index, "alpha beta gamma") == {1}
+    assert search(index, '"beta gamma"') == {1}
+    assert search(index, '"alpha beta gamma"') == set[int]()
+
+
+@given(st.lists(st.text(), min_size=1, max_size=6))
+def test_a_one_word_query_finds_exactly_the_documents_holding_that_term(
+    texts: list[str],
+) -> None:
+    index = _index_of(texts)
+    for token in set(_raw_tokens(texts)):
+        term = analyze(token)[0]
+        expected = {
+            document_id
+            for document_id, text in enumerate(texts)
+            if term in analyze(text)
+        }
+        assert search(index, token) == expected
+
+
+@given(st.lists(st.text(), min_size=1, max_size=6))
+def test_a_free_text_query_never_narrows_as_terms_are_added(
+    texts: list[str],
+) -> None:
+    index = _index_of(texts)
+    tokens = _raw_tokens(texts)
+    if len(tokens) < 2:
+        return
+    assert search(index, tokens[0]) <= search(index, f"{tokens[0]} {tokens[1]}")
+
+
+@given(st.lists(st.text(), min_size=1, max_size=6))
+def test_a_phrase_result_is_always_a_subset_of_the_free_text_result(
+    texts: list[str],
+) -> None:
+    """Adjacency is a strictly stronger condition than co-occurrence."""
+    index = _index_of(texts)
+    tokens = _raw_tokens(texts)
+    if len(tokens) < 2:
+        return
+    pair = f"{tokens[0]} {tokens[1]}"
+    assert search(index, f'"{pair}"') <= search(index, pair)
+
+
+@given(st.text())
+def test_every_adjacent_pair_in_a_document_is_found_as_a_phrase(text: str) -> None:
+    """Built from the document itself, so a miss here is a real defect.
+
+    The falsifying direction: rather than checking phrases invented by the
+    test, it takes pairs the document demonstrably contains and insists the
+    phrase query finds them.
+    """
+    index = InvertedIndex()
+    index.add_document(7, text)
+    for first, second in itertools.pairwise(tokenize(text)):
+        assert 7 in search(index, f'"{first} {second}"')

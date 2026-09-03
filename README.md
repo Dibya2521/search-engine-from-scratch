@@ -22,8 +22,8 @@ Under active development.
 | Corpus parser | not started |
 | Inverted index with positions | done |
 | Index persistence | not started |
-| One-word and free-text queries | not started |
-| Phrase queries | not started |
+| One-word and free-text queries | done |
+| Phrase queries | done |
 | TF-IDF ranking and cosine similarity | not started |
 | Retrieval quality evaluation | not started |
 
@@ -91,6 +91,7 @@ scripts/             corpus preparation utilities
 - [Tokenization](docs/01-tokenization.md)
 - [Stemming](docs/02-stemming.md)
 - [The inverted index](docs/03-inverted-index.md)
+- [Querying](docs/04-querying.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 
 ## Acknowledgements

@@ -17,11 +17,30 @@ CORPUS = {
     3: "Searching the web requires an index",
 }
 
+# Chosen so the same two words appear adjacent, apart, and in both orders.
+PHRASE_CORPUS = {
+    1: "The computer science department offers courses",
+    2: "Science and computer engineering are related",
+    3: "The department of computer science is large",
+    4: "Web search engines use an inverted index",
+    5: "computer science computer science",
+}
+
+
+def _build(corpus: dict[int, str]) -> InvertedIndex:
+    built = InvertedIndex()
+    for document_id, text in corpus.items():
+        built.add_document(document_id, text)
+    return built
+
 
 @pytest.fixture
 def index() -> InvertedIndex:
     """A three document index, small enough to assert postings by hand."""
-    built = InvertedIndex()
-    for document_id, text in CORPUS.items():
-        built.add_document(document_id, text)
-    return built
+    return _build(CORPUS)
+
+
+@pytest.fixture
+def phrase_index() -> InvertedIndex:
+    """An index built for exercising adjacency and term order."""
+    return _build(PHRASE_CORPUS)
