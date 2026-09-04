@@ -88,14 +88,23 @@ terms the index never stored, and the engine returns nothing at all while
 appearing to work perfectly. Sharing one function is what makes that
 impossible.
 
-There is a property test asserting that analysis emits exactly one term per
-token, at
-[`tests/test_analysis.py`](../tests/test_analysis.py). Nothing currently drops
-a token, so a term's index in the list is also its position in the text. That
-test exists to **fail** the moment a filtering stage is added, because removing
-intervening words silently redefines what a phrase is: with the stopwords gone,
-`"king of england"` and `"king england"` become the same query. That is a
-decision to take deliberately, and the failing test is the prompt to take it.
+Positions are indices into the **unfiltered** token stream, so a term dropped
+by stopword filtering leaves a gap rather than closing the sequence up. The
+index does not know or care that filtering happened; it stores whatever
+positions analysis reports.
+
+That gap is load-bearing. Without it, removing `of` would make `king of
+england` and `king england` store identical positions, and a phrase query could
+not tell them apart. The full argument is in
+[Stopwords](05-stopwords.md); the short version is that the query keeps its own
+offsets too, and phrase matching subtracts those rather than assuming the
+surviving terms were adjacent.
+
+There is a property test at
+[`tests/test_analysis.py`](../tests/test_analysis.py) asserting that with
+filtering switched off, positions are exactly `0, 1, 2, ...` and one term comes
+out per token. That is the original invariant surviving as the special case,
+which is what demonstrates filtering was the only thing that changed.
 
 ### Adding the same document twice is refused
 

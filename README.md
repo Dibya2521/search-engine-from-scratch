@@ -14,18 +14,18 @@ cosine similarity and top-K selection.
 
 Under active development.
 
-| Component | State |
-| --- | --- |
-| Tokenizer | done |
-| Stopword filtering | not started |
-| Porter stemmer | done |
-| Corpus parser | not started |
-| Inverted index with positions | done |
-| Index persistence | not started |
-| One-word and free-text queries | done |
-| Phrase queries | done |
+| Component                            | State       |
+| ------------------------------------ | ----------- |
+| Tokenizer                            | done        |
+| Stopword filtering                   | done        |
+| Porter stemmer                       | done        |
+| Corpus parser                        | not started |
+| Inverted index with positions        | done        |
+| Index persistence                    | not started |
+| One-word and free-text queries       | done        |
+| Phrase queries                       | done        |
 | TF-IDF ranking and cosine similarity | not started |
-| Retrieval quality evaluation | not started |
+| Retrieval quality evaluation         | not started |
 
 ## Design constraints
 
@@ -46,15 +46,31 @@ Under active development.
 
 ## Requirements
 
-- Python 3.12 or newer
-- [uv](https://docs.astral.sh/uv/) for dependency and environment management
+Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/) for dependencies and
+environments.
+
+```bash
+# Linux and macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+`uv` provisions the right Python itself, so no separate Python install is
+needed.
 
 ## Getting started
 
 ```bash
+git clone https://github.com/Dibya2521/search-engine-from-scratch
+cd search-engine-from-scratch
 uv sync --all-groups
 uv run search-engine --version
 ```
+
+`uv sync` creates the virtual environment, installs the pinned development
+tools from `uv.lock`, and installs this project in editable mode. `uv run`
+executes inside that environment without needing to activate it.
 
 ## Quality gates
 
@@ -92,6 +108,7 @@ scripts/             corpus preparation utilities
 - [Stemming](docs/02-stemming.md)
 - [The inverted index](docs/03-inverted-index.md)
 - [Querying](docs/04-querying.md)
+- [Stopwords](docs/05-stopwords.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 
 ## Acknowledgements

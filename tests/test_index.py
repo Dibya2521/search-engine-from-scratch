@@ -6,8 +6,15 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.analysis import analyze
+from search_engine.analysis import analyze, analyze_positioned
 from search_engine.index import DuplicateDocumentError, InvertedIndex
+
+
+def _index_of(texts: list[str]) -> InvertedIndex:
+    index = InvertedIndex()
+    for document_id, text in enumerate(texts):
+        index.add_document(document_id, text)
+    return index
 
 
 def test_an_empty_index_reports_nothing() -> None:
@@ -21,7 +28,7 @@ def test_an_empty_index_reports_nothing() -> None:
 
 def test_counts(index: InvertedIndex) -> None:
     assert index.document_count == 3
-    assert index.vocabulary_size == 15
+    assert index.vocabulary_size == 11
 
 
 @pytest.mark.parametrize(
@@ -40,6 +47,21 @@ def test_postings_record_document_and_position(
     assert index.postings(term) == expected
 
 
+@pytest.mark.parametrize("stopword", ["the", "an", "and", "to"])
+def test_stopwords_are_never_indexed(index: InvertedIndex, stopword: str) -> None:
+    assert stopword not in index
+    assert index.postings(stopword) == {}
+
+
+def test_dropping_a_stopword_leaves_a_gap_in_the_positions() -> None:
+    """Document 1 has "an" at position 4, so no term claims position 4."""
+    index = InvertedIndex()
+    index.add_document(1, "Web search engines build an inverted index")
+    claimed = {position for term in index.terms for position in index.postings(term)[1]}
+    assert claimed == {0, 1, 2, 3, 5, 6}
+    assert 4 not in claimed
+
+
 def test_stemmed_variants_share_one_postings_list(index: InvertedIndex) -> None:
     """Document 1 says `search`, document 3 says `Searching`."""
     assert set(index.postings("search")) == {1, 3}
@@ -54,6 +76,7 @@ def test_an_unknown_term_has_empty_postings_rather_than_raising(
 
 
 def test_a_repeated_term_records_every_position() -> None:
+    """Positions 1, 3 and 4 held stopwords, so they are absent."""
     index = InvertedIndex()
     index.add_document(9, "index the index of an index")
     assert index.postings("index") == {9: [0, 2, 5]}
@@ -71,6 +94,13 @@ def test_a_document_with_no_terms_still_counts_as_a_document() -> None:
     """It has to, or the total used to weight rare terms would be wrong."""
     index = InvertedIndex()
     index.add_document(1, "...!!!")
+    assert index.document_count == 1
+    assert index.vocabulary_size == 0
+
+
+def test_a_document_of_only_stopwords_still_counts_as_a_document() -> None:
+    index = InvertedIndex()
+    index.add_document(1, "the and of to a an")
     assert index.document_count == 1
     assert index.vocabulary_size == 0
 
@@ -95,10 +125,10 @@ def test_a_position_always_points_at_the_term_that_claimed_it(text: str) -> None
     """The invariant phrase queries rest on."""
     index = InvertedIndex()
     index.add_document(1, text)
-    terms = analyze(text)
+    positioned = dict(analyze_positioned(text))
     for term in index.terms:
         for position in index.postings(term)[1]:
-            assert terms[position] == term
+            assert positioned[position] == term
 
 
 @given(st.text())
@@ -123,9 +153,7 @@ def test_positions_are_stored_in_increasing_order(text: str) -> None:
 
 @given(st.lists(st.text(), min_size=1, max_size=8))
 def test_document_frequency_matches_a_direct_count(texts: list[str]) -> None:
-    index = InvertedIndex()
-    for document_id, text in enumerate(texts):
-        index.add_document(document_id, text)
+    index = _index_of(texts)
     assert index.document_count == len(texts)
     for term in index.terms:
         expected = sum(1 for text in texts if term in analyze(text))
@@ -134,9 +162,7 @@ def test_document_frequency_matches_a_direct_count(texts: list[str]) -> None:
 
 @given(st.lists(st.text(), min_size=1, max_size=8))
 def test_vocabulary_is_the_union_of_every_document(texts: list[str]) -> None:
-    index = InvertedIndex()
-    for document_id, text in enumerate(texts):
-        index.add_document(document_id, text)
+    index = _index_of(texts)
     expected = {term for text in texts for term in analyze(text)}
     assert set(index.terms) == expected
     assert index.vocabulary_size == len(expected)

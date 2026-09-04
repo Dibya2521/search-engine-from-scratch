@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from search_engine.analysis import analyze
+from search_engine.analysis import analyze_positioned
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -29,14 +29,21 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Query:
-    """A parsed query: the analyzed terms, and whether order matters."""
+    """A parsed query.
+
+    ``offsets[i]`` is where ``terms[i]`` sat in the original token stream, so a
+    dropped stopword leaves a gap. Phrase matching subtracts these rather than
+    consecutive integers, which is what lets a phrase containing a stopword
+    still match.
+    """
 
     terms: tuple[str, ...]
+    offsets: tuple[int, ...]
     is_phrase: bool
 
 
 def parse(text: str) -> Query:
-    """Parse query text into terms and a phrase flag.
+    """Parse query text into terms, their offsets, and a phrase flag.
 
     A query counts as a phrase only when the whole of it is wrapped in double
     quotes. Mixing a phrase with loose terms is not supported, and in that case
@@ -45,7 +52,12 @@ def parse(text: str) -> Query:
     stripped = text.strip()
     # The last clause stops a lone quote character satisfying both ends.
     is_phrase = stripped.startswith('"') and stripped.endswith('"') and stripped != '"'
-    return Query(terms=tuple(analyze(stripped)), is_phrase=is_phrase)
+    positioned = analyze_positioned(stripped)
+    return Query(
+        terms=tuple(term for _, term in positioned),
+        offsets=tuple(offset for offset, _ in positioned),
+        is_phrase=is_phrase,
+    )
 
 
 def _matching_any_term(index: InvertedIndex, terms: Sequence[str]) -> set[int]:
@@ -56,32 +68,38 @@ def _matching_any_term(index: InvertedIndex, terms: Sequence[str]) -> set[int]:
     return matches
 
 
-def _contains_phrase_at_any_position(
-    postings: Sequence[Mapping[int, Sequence[int]]], document_id: int
+def _contains_phrase(
+    postings: Sequence[Mapping[int, Sequence[int]]],
+    offsets: Sequence[int],
+    document_id: int,
 ) -> bool:
-    """Test whether one document holds the terms adjacent and in order.
+    """Test whether one document holds the terms at the queried spacing.
 
-    The trick is to subtract each term's offset in the phrase from its
-    positions. A three word phrase starting at position 7 gives positions 7, 8
-    and 9, which after subtracting 0, 1 and 2 all become 7. So the phrase
-    occurs exactly where the shifted position sets overlap, and adjacency
+    Subtract each term's query offset from its document positions. A phrase
+    occurring at document position ``p`` puts the term queried at offset ``i``
+    at ``p + i``, so subtracting ``i`` maps every term of a real occurrence
+    onto the same ``p``. Adjacency, and any gap a dropped stopword left,
     becomes a plain set intersection.
 
-    The shifted sets are built one at a time and the loop stops as soon as the
-    overlap empties, so a phrase that fails early never pays to build the rest.
-    Sorting them by size first was measurably slower: sorting has to build
-    every set before it can compare their lengths, which is the expensive part.
+    Sets are built one at a time and the loop stops the moment the overlap
+    empties, so a phrase failing early never pays to build the rest. Sorting
+    them by size first measured slower: sorting must build every set before it
+    can compare lengths, which is the expensive part.
     """
-    common = set(postings[0][document_id])
-    for offset in range(1, len(postings)):
+    common = {position - offsets[0] for position in postings[0][document_id]}
+    for index in range(1, len(postings)):
         if not common:
             return False
-        common &= {position - offset for position in postings[offset][document_id]}
+        common &= {
+            position - offsets[index] for position in postings[index][document_id]
+        }
     return bool(common)
 
 
-def _matching_phrase(index: InvertedIndex, terms: Sequence[str]) -> set[int]:
-    """Find documents holding every term, adjacent and in the given order."""
+def _matching_phrase(
+    index: InvertedIndex, terms: Sequence[str], offsets: Sequence[int]
+) -> set[int]:
+    """Find documents holding every term at the spacing the query asked for."""
     if not terms:
         return set()
     postings = [index.postings(term) for term in terms]
@@ -100,14 +118,14 @@ def _matching_phrase(index: InvertedIndex, terms: Sequence[str]) -> set[int]:
     return {
         document_id
         for document_id in candidates
-        if _contains_phrase_at_any_position(postings, document_id)
+        if _contains_phrase(postings, offsets, document_id)
     }
 
 
 def execute(index: InvertedIndex, query: Query) -> set[int]:
     """Run a parsed query and return the identifiers of matching documents."""
     if query.is_phrase:
-        return _matching_phrase(index, query.terms)
+        return _matching_phrase(index, query.terms, query.offsets)
     return _matching_any_term(index, query.terms)
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from search_engine.analysis import analyze
+from search_engine.analysis import analyze_positioned
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -59,7 +59,7 @@ class InvertedIndex:
         if document_id in self._document_ids:
             raise DuplicateDocumentError(document_id)
         self._document_ids.add(document_id)
-        for position, term in enumerate(analyze(text)):
+        for position, term in analyze_positioned(text):
             self._postings.setdefault(term, {}).setdefault(document_id, []).append(
                 position
             )

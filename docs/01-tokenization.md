@@ -239,17 +239,16 @@ statistics attached to it are meaningless. Retrieval wants tokens that are
 ## How it connects to everything else
 
 - **Stopword filtering** consumes this output, and can only remove tokens this
-  stage produced. A stopword list is therefore defined against a specific
-  tokenizer; change the tokenizer and the list may stop matching.
+  stage produced. The list is therefore defined against a specific tokenizer,
+  and every entry is asserted to survive tokenization unchanged.
 - **Stemming** also consumes it, and only makes sense on word-like tokens. The
   `t` left over from `don't` will be stemmed to `t`, wasting a vocabulary slot.
 - **The inverted index** calls `enumerate` on this sequence, which is where
   positions come from. Every position is an index into this list, which is why
   the length-preservation problem above does not bite.
-- **Phrase queries** depend on adjacent tokens holding adjacent positions. Note
-  the trap that creates for stopwords: if stopwords are removed *before*
-  positions are assigned, `"king of england"` and `"king england"` become the
-  same phrase. That has to be a deliberate decision rather than an accident.
+- **Phrase queries** depend on positions, and on the gaps in them. Stopword
+  filtering removes terms but keeps their positions, so `"king of england"` and
+  `"king england"` stay distinguishable. See [Stopwords](05-stopwords.md).
 - **TF-IDF** counts these tokens. Splitting `naïve` into `na` and `ve` creates
   two junk terms, each with its own document frequency, which shifts the IDF of
   every other term by changing the vocabulary size.

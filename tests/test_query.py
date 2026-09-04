@@ -16,7 +16,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.analysis import analyze
+from search_engine.analysis import analyze, analyze_positioned
 from search_engine.index import InvertedIndex
 from search_engine.query import Query, parse, search
 from search_engine.tokenizer import tokenize
@@ -29,31 +29,50 @@ def _index_of(texts: list[str]) -> InvertedIndex:
     return index
 
 
-def _raw_tokens(texts: list[str]) -> list[str]:
-    return [token for text in texts for token in tokenize(text)]
-
-
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("computer", Query(terms=("comput",), is_phrase=False)),
-        ("Computer SCIENCE", Query(terms=("comput", "scienc"), is_phrase=False)),
-        ('"computer science"', Query(terms=("comput", "scienc"), is_phrase=True)),
-        ('"computer"', Query(terms=("comput",), is_phrase=True)),
-        ("", Query(terms=(), is_phrase=False)),
-        ("   ", Query(terms=(), is_phrase=False)),
-        ('""', Query(terms=(), is_phrase=True)),
-        ('"', Query(terms=(), is_phrase=False)),
+        ("computer", Query(terms=("comput",), offsets=(0,), is_phrase=False)),
+        (
+            "Computer SCIENCE",
+            Query(terms=("comput", "scienc"), offsets=(0, 1), is_phrase=False),
+        ),
+        (
+            '"computer science"',
+            Query(terms=("comput", "scienc"), offsets=(0, 1), is_phrase=True),
+        ),
+        ('"computer"', Query(terms=("comput",), offsets=(0,), is_phrase=True)),
+        ("", Query(terms=(), offsets=(), is_phrase=False)),
+        ("   ", Query(terms=(), offsets=(), is_phrase=False)),
+        ('""', Query(terms=(), offsets=(), is_phrase=True)),
+        ('"', Query(terms=(), offsets=(), is_phrase=False)),
     ],
 )
 def test_parsing(text: str, expected: Query) -> None:
     assert parse(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_offsets"),
+    [
+        ('"the computer science"', (1, 2)),
+        ('"department of computer science"', (0, 2, 3)),
+        ('"computer of science"', (0, 2)),
+    ],
+)
+def test_a_dropped_stopword_leaves_a_gap_in_the_query_offsets(
+    text: str, expected_offsets: tuple[int, ...]
+) -> None:
+    """These gaps are what make a phrase containing a stopword still matchable."""
+    assert parse(text).offsets == expected_offsets
+
+
 @pytest.mark.parametrize("text", ['computer "science"', '"computer" science'])
 def test_a_partly_quoted_query_is_not_a_phrase(text: str) -> None:
     """Mixing a phrase with loose terms is unsupported, so quotes just separate."""
-    assert parse(text) == Query(terms=("comput", "scienc"), is_phrase=False)
+    assert parse(text) == Query(
+        terms=("comput", "scienc"), offsets=(0, 1), is_phrase=False
+    )
 
 
 def test_query_terms_are_stemmed_like_documents(phrase_index: InvertedIndex) -> None:
@@ -84,6 +103,7 @@ def test_a_term_read_back_from_the_index_is_not_a_valid_query() -> None:
         ("index", {4}),
         ("nonexistent", set[int]()),
         ("", set[int]()),
+        ("the", set[int]()),
     ],
 )
 def test_one_word_queries(
@@ -125,6 +145,29 @@ def test_phrase_queries_require_adjacency_in_order(
     assert search(phrase_index, text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Leading stopword: offsets (1,2), so it still matches.
+        ('"the computer science"', {1, 3, 5}),
+        # Document 3 reads "department of computer science", gap and all.
+        ('"department of computer science"', {3}),
+        # No document has computer, one word, science.
+        ('"computer of science"', set[int]()),
+    ],
+)
+def test_a_phrase_containing_a_stopword_still_matches_correctly(
+    phrase_index: InvertedIndex, text: str, expected: set[int]
+) -> None:
+    """The reason query offsets exist rather than consecutive integers.
+
+    Removing stopwords from both sides and then assuming the surviving terms
+    were adjacent would make the first case match nothing and the third match
+    document 3 wrongly.
+    """
+    assert search(phrase_index, text) == expected
+
+
 def test_a_phrase_excludes_documents_holding_the_terms_apart(
     phrase_index: InvertedIndex,
 ) -> None:
@@ -163,12 +206,14 @@ def test_a_one_word_query_finds_exactly_the_documents_holding_that_term(
     texts: list[str],
 ) -> None:
     index = _index_of(texts)
-    for token in set(_raw_tokens(texts)):
-        term = analyze(token)[0]
+    for token in {token for text in texts for token in tokenize(text)}:
+        terms = analyze(token)
+        if not terms:
+            continue  # a stopword on its own is not a query
         expected = {
             document_id
             for document_id, text in enumerate(texts)
-            if term in analyze(text)
+            if terms[0] in analyze(text)
         }
         assert search(index, token) == expected
 
@@ -178,7 +223,7 @@ def test_a_free_text_query_never_narrows_as_terms_are_added(
     texts: list[str],
 ) -> None:
     index = _index_of(texts)
-    tokens = _raw_tokens(texts)
+    tokens = [token for text in texts for token in tokenize(text) if analyze(token)]
     if len(tokens) < 2:
         return
     assert search(index, tokens[0]) <= search(index, f"{tokens[0]} {tokens[1]}")
@@ -190,7 +235,7 @@ def test_a_phrase_result_is_always_a_subset_of_the_free_text_result(
 ) -> None:
     """Adjacency is a strictly stronger condition than co-occurrence."""
     index = _index_of(texts)
-    tokens = _raw_tokens(texts)
+    tokens = [token for text in texts for token in tokenize(text) if analyze(token)]
     if len(tokens) < 2:
         return
     pair = f"{tokens[0]} {tokens[1]}"
@@ -198,14 +243,16 @@ def test_a_phrase_result_is_always_a_subset_of_the_free_text_result(
 
 
 @given(st.text())
-def test_every_adjacent_pair_in_a_document_is_found_as_a_phrase(text: str) -> None:
-    """Built from the document itself, so a miss here is a real defect.
+def test_any_span_of_a_document_is_findable_as_a_phrase(text: str) -> None:
+    """The falsifying direction, and it exercises the stopword gaps hardest.
 
-    The falsifying direction: rather than checking phrases invented by the
-    test, it takes pairs the document demonstrably contains and insists the
-    phrase query finds them.
+    Takes the literal text between two consecutive surviving terms, stopwords
+    included, and insists the phrase query finds the document it came from.
     """
     index = InvertedIndex()
     index.add_document(7, text)
-    for first, second in itertools.pairwise(tokenize(text)):
-        assert 7 in search(index, f'"{first} {second}"')
+    tokens = tokenize(text)
+    positioned = analyze_positioned(text)
+    for (first, _), (second, _) in itertools.pairwise(positioned):
+        span = " ".join(tokens[first : second + 1])
+        assert 7 in search(index, f'"{span}"')

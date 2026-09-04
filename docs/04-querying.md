@@ -39,8 +39,8 @@ Finding documents containing every term is just a set intersection over the
 postings keys. The hard part is *adjacency*: knowing the terms sat next to each
 other rather than scattered through the document.
 
-The trick is to **subtract each term's offset within the phrase from its
-positions**, then intersect.
+The trick is to **subtract each term's offset in the query from its positions in
+the document**, then intersect.
 
 Take the phrase `computer science department` and a document holding:
 
@@ -50,8 +50,8 @@ science  at position       3
 department at positions    4, 6
 ```
 
-Subtract 0 from the first term's positions, 1 from the second's, 2 from the
-third's:
+The query offsets here are 0, 1 and 2. Subtract each term's offset from its
+positions:
 
 ```text
 computer   {2, 5} - 0  ->  {2, 5}
@@ -63,11 +63,29 @@ intersection ->  {2}
 
 The result is non-empty, so the phrase occurs, starting at position 2.
 
-Why it works: if the phrase begins at position `p`, then term `i` sits at
-`p + i`, so subtracting `i` maps every term of a genuine occurrence onto the
-same number `p`. A shared value in the intersection *is* a starting position.
-Adjacency, which sounds like it needs ordered traversal, collapses into one set
-intersection.
+Why it works: if the phrase begins at document position `p`, then the term
+queried at offset `i` sits at `p + i`, so subtracting `i` maps every term of a
+genuine occurrence onto the same number `p`. A shared value in the intersection
+*is* a starting position. Adjacency, which sounds like it needs ordered
+traversal, collapses into one set intersection.
+
+**The offsets come from the query, not from a counter.** That distinction looks
+pedantic until stopwords exist. Once they do, both the document and the query
+have gaps where common words were removed, and only the query's real offsets
+line the two up:
+
+```text
+document "computer of science"  ->  comput@0, scienc@2
+
+query "computer science"      offsets (0,1)  ->  {0-0} & {2-1} = {}   no match
+query "computer of science"    offsets (0,2)  ->  {0-0} & {2-2} = {0}  match
+query "the computer science"    offsets (1,2)  ->  only differences matter
+```
+
+With no filtering the offsets are `0, 1, 2, ...` and this reduces exactly to the
+version above, so gaps are the general case of the same arithmetic rather than a
+special case bolted on. See [Stopwords](05-stopwords.md) for why the two obvious
+alternatives are both wrong.
 
 ## Parsing rules
 
