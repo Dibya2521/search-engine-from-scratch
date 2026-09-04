@@ -44,6 +44,10 @@ dev = [
 [tool.hatch.version]
 path = "src/search_engine/__init__.py"
 
+[tool.hatch.build.targets.sdist]
+# Allowlist: git-excluded folders are invisible to git, not to the build backend.
+only-include = ["src", "tests", "docs", "benchmarks", "README.md", "LICENSE"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/search_engine"]
 

@@ -12,6 +12,7 @@ venv/
 # Tooling caches
 .ruff_cache/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .pyright/
 
