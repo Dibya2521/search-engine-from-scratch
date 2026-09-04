@@ -23,8 +23,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 
-# Empty by design. The runtime is standard library only, because building the
-# mechanisms is the point of this project. See docs/adr/0001-toolchain.md.
+# Standard library only by design. See docs/adr/0001-toolchain.md.
 dependencies = []
 
 [project.scripts]
@@ -48,9 +47,6 @@ path = "src/search_engine/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/search_engine"]
 
-# ---------------------------------------------------------------------------
-# ruff: primary linter and the only formatter
-# ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -66,56 +62,40 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Assertions are the point of a test, and bare integers in assertions are clearer
-# than named constants.
+# A bare assert and a bare number read better in a test.
 "tests/**/*.py" = ["D103", "PLR2004", "S101"]
-# Not importable packages, they are allowed to print, and they seed a plain
-# random generator on purpose so their synthetic data is reproducible.
+# Not importable, may print, and seed a plain RNG for reproducible data.
 "benchmarks/**/*.py" = ["INP001", "S311", "T201"]
 "scripts/**/*.py" = ["INP001", "S311", "T201"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.pylint]
+max-args = 5
+max-statements = 25
+
 [tool.ruff.format]
 docstring-code-format = true
 
-# ---------------------------------------------------------------------------
-# pylint: kept alongside ruff only for the design and duplication checks that
-# ruff does not implement. Everything ruff already owns is disabled below.
-# ---------------------------------------------------------------------------
+# Only the four checks ruff cannot run. See docs/adr/0001-toolchain.md.
 [tool.pylint.main]
 py-version = "3.12"
 jobs = 0
 
-[tool.pylint.format]
-max-line-length = 88
-
 [tool.pylint.design]
-max-args = 5
 max-locals = 12
-max-statements = 25
-# One function body plus two nested blocks.
 max-nested-blocks = 3
 
 [tool.pylint.messages_control]
-disable = [
-  "line-too-long",              # ruff E501
-  "missing-class-docstring",    # ruff D101
-  "missing-function-docstring", # ruff D103
-  "missing-module-docstring",   # ruff D100
-  "missing-final-newline",      # ruff W292
-  "too-few-public-methods",     # noisy on deliberate data holders
-  "trailing-whitespace",        # ruff W291
-  "unused-import",              # ruff F401
-  "unused-variable",            # ruff F841
-  "wrong-import-order",         # ruff I001
-  "wrong-import-position",      # ruff E402
+disable = ["all"]
+enable = [
+  "duplicate-code",
+  "redefined-outer-name",
+  "too-many-locals",
+  "too-many-nested-blocks",
 ]
 
-# ---------------------------------------------------------------------------
-# pyright: strict, because an unchecked type is an unverified assumption
-# ---------------------------------------------------------------------------
 [tool.pyright]
 include = ["src", "tests", "scripts", "benchmarks"]
 pythonVersion = "3.12"
@@ -123,9 +103,6 @@ typeCheckingMode = "strict"
 venvPath = "."
 venv = ".venv"
 
-# ---------------------------------------------------------------------------
-# pytest and coverage
-# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

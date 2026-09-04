@@ -97,30 +97,89 @@ only, as a differential oracle against the from-scratch stemmer.
   importable packages.
 - **Accepted cost.** The first run on new code usually fails. That is the gate
   working, and the response is to read the finding rather than add an ignore.
+- **The mainstream alternative, and when to prefer it.** Most large projects
+  select rule *families* instead of everything, for example
+  `select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]`. Eight codes,
+  readable at a glance, and no long ignore list. That is the better choice when
+  a team has to agree on the configuration, because a family list states intent
+  while `ALL` plus exceptions states history.
+- **Why `ALL` still wins here.** 829 stable rules are enabled and exactly
+  **four** required a global suppression. A suppression rate under one percent
+  is evidence that the maximal setting is not fighting this codebase, which is
+  the usual reason projects retreat to a family list.
+- **Nobody reads 829 rules, and the config does not require it.** The ignore
+  list is not designed up front, it accumulates: a rule fires, it is either
+  fixed or given an ignore with a reason, one at a time. Rules that have paid
+  for themselves this way include `RUF001` (visually ambiguous Unicode in a
+  string), `RUF100` (a suppression that suppresses nothing), `PLR2004` (magic
+  values), `PLR0915` (an over-long function), and `D403`. None of them would
+  have been chosen deliberately from a list.
 
-## Decision 5: pylint kept in addition to ruff
+## Decision 5: pylint kept, but restricted to four checks
 
-This is the one decision that looks redundant, so it carries the most reasoning.
+Most projects that once ran both have dropped pylint, and they are right to.
+This is the decision that looks redundant, so it is the one settled by
+measurement rather than argument.
 
-- **Purpose.** Catch design-level problems ruff does not implement.
-- **What it uniquely adds.** `duplicate-code` (R0801), a whole-program
-  similarity analysis with no ruff equivalent, and the limits under
-  `[tool.pylint.design]`.
-- **How the overlap is resolved.** Every message pylint raises that ruff already
-  owns is disabled by name, with the equivalent ruff code in a comment on each
-  line. So each class of problem is reported by exactly one tool, and the
-  reasoning is auditable rather than assumed.
-- **Alternatives.** Drop pylint and accept the loss of duplication detection,
-  which is a real loss on a codebase that will grow several structurally similar
-  postings-intersection routines. Or drop ruff and keep pylint alone, which is
-  far slower and has no formatter.
-- **Why both.** Once the overlap is cut they are complementary: ruff is a fast
-  per-file linter, pylint is a slower whole-program analyser. The cost is one
-  extra process in the gate; the benefit is the class of finding that only
-  appears across files.
-- **Side benefit.** `max-nested-blocks = 3` enforces a two-levels-of-nesting
-  guideline that no ruff rule expresses. Without pylint that guideline would rest
-  on review discipline alone.
+### Why the usual arrangement is indefensible
+
+Configured with its default rule set, pylint cost **18.64s of a 31.9s gate**,
+58 percent of the total, and almost every message it produced was one ruff had
+already reported. Paying more than half the gate for duplicate findings cannot
+be justified. That is the real reason the ecosystem moved on, and dropping
+pylint outright is a reasonable conclusion from it.
+
+### What only pylint can do
+
+Four checks, and nothing else:
+
+| Check | Situation in ruff |
+| --- | --- |
+| `redefined-outer-name` | **No equivalent at any setting.** Verified by running ruff with every rule plus preview against a parameter shadowing a module-level function: it reports nothing. |
+| `duplicate-code` | No equivalent. Nothing in ruff compares across files. |
+| `too-many-nested-blocks` | `PLR1702`, preview only. |
+| `too-many-locals` | `PLR0914`, preview only. |
+
+Enabling ruff's preview mode to recover the last two was measured and rejected:
+it adds 42 findings on this codebase, 24 of them demanding a `Returns:` section
+in every docstring, which contradicts the rule that a docstring carries the
+non-obvious fact and nothing more.
+
+`redefined-outer-name` has already earned its keep. It found eight real defects
+here that ruff missed: seven helper parameters in the stemmer named `stem`,
+shadowing the module-level `stem` function, and one in a fixture. That is a
+readability defect rather than a style preference, and nothing else would have
+caught it.
+
+`duplicate-code` has not fired yet. It is kept on the expectation that several
+structurally similar postings-intersection routines are coming, which is exactly
+what a cross-file similarity analysis is for.
+
+### How it is configured
+
+Inverted from the usual arrangement: `disable = ["all"]`, then those four
+enabled by name. The design limits ruff *can* enforce (`PLR0913` arguments,
+`PLR0915` statements, `PLR0912` branches) moved into `[tool.ruff.lint.pylint]`,
+so each limit is applied by exactly one tool.
+
+The result is **9.70s instead of 18.64s**, a total gate of 20.8s instead of
+31.9s, and a role that states itself: pylint runs the four checks ruff cannot.
+
+### Alternatives
+
+- **Drop pylint entirely.** Gate falls to 13.1s, one less tool to explain, and
+  it matches common practice. Rejected because shadowing detection would be
+  lost permanently rather than temporarily: ruff cannot do it at any setting, so
+  the eight defects found here would have shipped unnoticed.
+- **Keep the default rule set.** Rejected on the 58 percent measurement.
+- **Move pylint to a pre-push stage.** Rejected under Decision 8: a commit that
+  has not passed the gates is no longer a safe point to reset to.
+
+### The transferable point
+
+"Two linters" and "two overlapping linters" are different decisions. The second
+is waste. The first is only worth defending when the second tool's contribution
+can be named exactly, which here is four checks and one proven class of defect.
 
 ## Decision 6: pyright in strict mode
 
@@ -167,12 +226,21 @@ This is the one decision that looks redundant, so it carries the most reasoning.
   `uv.lock` and therefore match CI exactly.
 - **Alternatives.** The common arrangement is fast hooks on commit and slow ones
   on push or in CI only, which is better once a test suite is slow.
-- **Why this one, for now.** The suite currently runs in about a second, so the
-  honest choice is to run everything and measure rather than pre-optimise for a
-  slowness that does not exist. The decision is explicitly conditional: if the
-  hook run exceeds roughly ten seconds, pytest and pylint move to a pre-push
-  stage and this ADR gets a superseding note. The trigger is a measurement, not
-  a feeling.
+- **Why this one.** A commit that has not passed the gates is not a safe point
+  to reset to, and the whole value of committing freely is that every commit is
+  such a point.
+- **Revising an earlier condition in this document.** An earlier version set a
+  ten second budget for the hook run, chosen before anything had been measured.
+  The gate now takes 20.8s, so by that rule the slow checks should move to
+  pre-push. The rule was wrong rather than the gate: it treated hook duration as
+  the thing to minimise, when the thing to protect is the guarantee that any
+  commit is green. At a slice-per-commit cadence, 20.8s is a fair price for
+  that, and the earlier figure was a guess dressed as a threshold.
+- **The condition that replaces it.** Move the slow checks to pre-push when the
+  gate starts changing behaviour, meaning commits get batched or skipped to
+  avoid the wait. That is observable, unlike a number picked in advance.
+- **Measured composition** of the 20.8s: ruff 0.5s, pylint 9.7s, pyright 4.6s,
+  pytest 6.0s.
 - **Note.** `check-added-large-files` is the load-bearing hook. Corpus data that
   reaches git history cannot be removed cleanly afterwards.
 
