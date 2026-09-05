@@ -249,7 +249,7 @@ statistics attached to it are meaningless. Retrieval wants tokens that are
 - **Phrase queries** depend on positions, and on the gaps in them. Stopword
   filtering removes terms but keeps their positions, so `"king of england"` and
   `"king england"` stay distinguishable. See [Stopwords](05-stopwords.md).
-- **TF-IDF** counts these tokens. Splitting `naïve` into `na` and `ve` creates
+- **[Ranking](06-ranking.md)** counts these tokens. Splitting `naïve` into `na` and `ve` creates
   two junk terms, each with its own document frequency, which shifts the IDF of
   every other term by changing the vocabulary size.
 - **The query path** must call this exact function, for the reason given at the

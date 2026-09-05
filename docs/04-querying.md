@@ -28,8 +28,9 @@ candidate set, and scoring then sorts the ones matching more terms to the top.
 Under AND semantics a single unusual word in the query silently empties the
 result.
 
-That reasoning only holds once ranking exists. Until then a free-text query
-returns a large unordered set, which is honest but not yet useful.
+That reasoning depends on ranking existing, and it does:
+[TF-IDF scoring](06-ranking.md) turns the wide candidate set into an ordered
+list, so breadth costs nothing at the top of the results.
 
 ## The phrase query trick
 
@@ -220,7 +221,7 @@ get their own terms, everything else falls back to position arithmetic.
 - **Stopword filtering**, if it ever removes terms before positions are
   assigned, changes what a phrase *means* rather than just what it costs:
   `"king of england"` would match text reading `king england`.
-- **Ranking** consumes exactly what these functions return. A candidate set is
+- **[Ranking](06-ranking.md)** consumes exactly what these functions return. A candidate set is
   the input to scoring, which is why they return sets rather than ordered
   results: imposing an order here would be inventing one.
 - **The document frequency** already exposed by the index is what lets the

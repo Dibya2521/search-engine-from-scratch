@@ -34,8 +34,13 @@ else was available, and the fact that settled it.
   Python.
 - **Escape hatch.** A runtime dependency is permitted, but only with its own ADR
   stating what standard library approach was tried and where it fell short.
-  `numpy` for the ranking arithmetic is the likely candidate, and it must be
-  justified by a measurement rather than an assumption about speed.
+- **The predicted first exception did not materialise.** `numpy` was named here
+  as the likely candidate, for the ranking vector arithmetic. Ranking is now
+  complete without it, at 1.7 microseconds per candidate, because the vectors
+  are sparse: a document holds a few dozen of several thousand possible terms,
+  so a dict of the non-zero components beats a dense array. `numpy` would have
+  been the wrong tool, and assuming otherwise would have cost the constraint for
+  nothing. The measurement is in docs/06-ranking.md.
 
 Development and test dependencies are deliberately unrestricted, because their
 job is verification rather than implementation. `nltk` is used in tests
@@ -65,10 +70,14 @@ only, as a differential oracle against the from-scratch stemmer.
   fourth chance of a version-specific type error. The upper end matters more
   than the lower: 3.14 is recent, and testing it is how a version-specific break
   surfaces here rather than at the point where it blocks work.
-- **Not yet verified.** Whether every development dependency has working wheels
-  on 3.14 in CI. No CI run has happened yet, so the first run is the check. If a
-  tool lags, the fix is to drop that one job with a comment, not to lower the
-  floor.
+- **Now verified.** CI passes on all three versions, so every development
+  dependency does have working wheels on 3.14. This was recorded as unverified
+  until the first run, and the first run settled it.
+- **What the first CI run actually caught** was unrelated and worth recording:
+  `astral-sh/setup-uv@v10` does not resolve, because that action stops
+  publishing moving major tags at `v7` even though releases reach `v10.0.1`.
+  Verifying that a version exists is not the same as verifying that the ref you
+  wrote resolves, and only a real run distinguishes them.
 
 ## Decision 4: ruff as the primary linter and the only formatter
 
@@ -162,8 +171,8 @@ enabled by name. The design limits ruff *can* enforce (`PLR0913` arguments,
 `PLR0915` statements, `PLR0912` branches) moved into `[tool.ruff.lint.pylint]`,
 so each limit is applied by exactly one tool.
 
-The result is **9.70s instead of 18.64s**, a total gate of 20.8s instead of
-31.9s, and a role that states itself: pylint runs the four checks ruff cannot.
+The result, measured when the suite held 231 tests, was **9.70s instead of
+18.64s**, and a total gate of 20.8s instead of 31.9s, and a role that states itself: pylint runs the four checks ruff cannot.
 
 ### Alternatives
 
@@ -231,16 +240,21 @@ can be named exactly, which here is four checks and one proven class of defect.
   such a point.
 - **Revising an earlier condition in this document.** An earlier version set a
   ten second budget for the hook run, chosen before anything had been measured.
-  The gate now takes 20.8s, so by that rule the slow checks should move to
-  pre-push. The rule was wrong rather than the gate: it treated hook duration as
+  The gate took 20.8s at that point, and takes 28.8s now, so by that rule the
+  slow checks should have moved to pre-push twice over. The rule was wrong
+  rather than the gate: it treated hook duration as
   the thing to minimise, when the thing to protect is the guarantee that any
-  commit is green. At a slice-per-commit cadence, 20.8s is a fair price for
-  that, and the earlier figure was a guess dressed as a threshold.
+  commit is green. At a slice-per-commit cadence that is a fair price, and the
+  earlier figure was a guess dressed as a threshold.
 - **The condition that replaces it.** Move the slow checks to pre-push when the
   gate starts changing behaviour, meaning commits get batched or skipped to
   avoid the wait. That is observable, unlike a number picked in advance.
-- **Measured composition** of the 20.8s: ruff 0.5s, pylint 9.7s, pyright 4.6s,
-  pytest 6.0s.
+- **Measured composition**, re-taken once the suite reached 365 tests: ruff
+  0.6s, pylint 9.2s, pyright 3.6s, pytest 15.4s, for 28.8s total. pytest is now
+  the largest share, having overtaken pylint, and most of it is the
+  property-based tests generating hundreds of cases. That is the gate earning
+  its cost rather than wasting it, so the replacement condition above still says
+  leave it alone.
 - **Note.** `check-added-large-files` is the load-bearing hook. Corpus data that
   reaches git history cannot be removed cleanly afterwards.
 

@@ -58,7 +58,7 @@ adjacent.
 
 The measured cost is 131 bytes per posting, and total index memory of **9.4
 times the source text**. That is the price of positions, and it is the single
-strongest argument for the on-disk format that comes next: a 300 MB corpus
+strongest argument for the [on-disk format](07-corpus-and-persistence.md): a 300 MB corpus
 projects to roughly 2.8 GB of memory, which is more than a build should need.
 
 ## Design decisions
@@ -73,9 +73,10 @@ The reason is that every query operation needed here is a **set operation over
 document identifiers**: a free-text query is a union, a phrase query starts
 with an intersection. Dictionary keys give those directly, whereas a sorted
 list requires a merge walk to get the same answer. The sorted list wins when
-postings live on disk and must be streamed in order, which is exactly the
-situation the persistence format will face, so this choice is scoped to the
-in-memory structure and will be revisited rather than assumed.
+postings must be streamed from disk in order, and that is what happened: the
+[on-disk format](07-corpus-and-persistence.md) writes each term line with its
+document identifiers sorted, precisely so it can be read in order. The two
+shapes coexist because they answer to different constraints.
 
 ### Positions are token positions, and one pipeline produces both sides
 
@@ -196,9 +197,12 @@ identifiers.
 - **Phrase queries** intersect the document keys first, then intersect
   positions within each surviving document. They are the only reason positions
   are stored at all.
-- **TF-IDF** needs two things this already provides: the document frequency of
-  a term, and the total document count. It will additionally need each term's
-  frequency within a document, which is the length of its position list, so the
-  positional postings turn out to carry the term frequencies for free.
-- **Persistence** must serialise this structure, and the 9.4x memory
-  measurement above is the reason it matters.
+- **[Ranking](06-ranking.md)** needs three things, and this provides all of
+  them: a term document frequency, the total document count, and each term
+  frequency within a document, which is simply the length of its position list.
+  The positional postings stored for phrase queries turned out to carry the term
+  frequencies for free, so ranking needed no new stored data at all.
+- **[Persistence](07-corpus-and-persistence.md)** serialises this structure, and
+  the 9.4x memory measurement above is why it matters. Document identifiers are
+  stored separately there for the same reason they are tracked separately here:
+  a document holding no terms appears in no postings list.

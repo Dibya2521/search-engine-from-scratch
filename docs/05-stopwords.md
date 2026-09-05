@@ -164,6 +164,7 @@ and because the position problem is worth having solved.
   analysis reports.
 - **Phrase queries** are the only part that had to change, and the change was to
   stop assuming query terms are consecutive.
-- **TF-IDF** will make the deletion partly redundant, since `log(N/df)` already
-  drives a term in every document to a weight of zero. The two mechanisms
-  overlap, and measuring how much is worth doing once ranking exists.
+- **[Ranking](06-ranking.md)** makes the deletion partly redundant, since
+  `log(N/df)` already drives a term in every document to a weight of exactly
+  zero. The two mechanisms overlap, and the size measurement above is the only
+  remaining argument for deleting rather than down-weighting.

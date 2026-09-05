@@ -221,7 +221,7 @@ inverted index compares strings rather than meanings.
 - **Tokenization** runs first and feeds this. Its ASCII-only rule leaves
   debris, and stemming propagates it: the `t` from `don't` stems to `t` and
   occupies a vocabulary slot forever. Garbage in, garbage indexed.
-- **Stopword filtering** interacts by order. Stemming first turns `having`
+- **[Stopword filtering](05-stopwords.md)** interacts by order. Stemming first turns `having`
   into `have`, which changes whether a stopword list matches, so the list is
   defined against a particular position in the pipeline rather than in the
   abstract.
@@ -229,7 +229,7 @@ inverted index compares strings rather than meanings.
   the vocabulary and therefore the index size.
 - **Phrase queries** are unaffected in structure, since stemming is
   position-preserving: it rewrites tokens without adding or removing any.
-- **TF-IDF** is affected substantially. Merging forms merges their document
+- **[Ranking](06-ranking.md)** is affected substantially. Merging forms merges their document
   frequencies, so every stemmed term has a different, lower IDF than its
   surface forms would have had, and the vocabulary size that normalises
   everything shrinks.

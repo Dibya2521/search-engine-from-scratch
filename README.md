@@ -12,37 +12,22 @@ cosine similarity and top-K selection.
 
 ## Status
 
-Under active development.
+Complete and working end to end.
 
-| Component                            | State       |
-| ------------------------------------ | ----------- |
-| Tokenizer                            | done        |
-| Stopword filtering                   | done        |
-| Porter stemmer                       | done        |
-| Corpus parser                        | not started |
-| Inverted index with positions        | done        |
-| Index persistence                    | not started |
-| One-word and free-text queries       | done        |
-| Phrase queries                       | done        |
-| TF-IDF ranking and cosine similarity | not started |
-| Retrieval quality evaluation         | not started |
+| Component | State |
+| --- | --- |
+| Tokenizer | done |
+| Stopword filtering | done |
+| Porter stemmer | done |
+| Corpus parser | done |
+| Inverted index with positions | done |
+| Index persistence | done |
+| One-word and free-text queries | done |
+| Phrase queries | done |
+| TF-IDF ranking and cosine similarity | done |
+| Retrieval quality evaluation | done |
 
-## Design constraints
-
-1. **No runtime dependencies.** `project.dependencies` is empty and stays that
-   way. Anything added needs an architecture decision record explaining where
-   the standard library fell short.
-2. **Development dependencies are unrestricted**, and are used as verification
-   instruments rather than implementation shortcuts. The clearest case: the
-   from-scratch Porter stemmer is verified against an independent
-   implementation as a differential oracle, so a disagreement falsifies this
-   code rather than confirming it.
-3. **Every claim carries a measurement.** Index sizes, build times and query
-   latencies in the documentation come from a reproducible command, never from
-   an estimate.
-4. **Documents and queries are processed by the same code path.** If the two
-   ever diverge, queries produce keys the index does not contain and the engine
-   silently returns nothing.
+365 tests, 100 percent branch coverage, verified on Python 3.12, 3.13 and 3.14.
 
 ## Requirements
 
@@ -65,12 +50,97 @@ needed.
 git clone https://github.com/Dibya2521/search-engine-from-scratch
 cd search-engine-from-scratch
 uv sync --all-groups
-uv run search-engine --version
 ```
 
 `uv sync` creates the virtual environment, installs the pinned development
 tools from `uv.lock`, and installs this project in editable mode. `uv run`
 executes inside that environment without needing to activate it.
+
+## Using it
+
+Build an index once, then query it as often as you like. A small corpus is
+included so this works immediately.
+
+```bash
+uv run search-engine index tests/fixtures/sample_corpus.xml sample.index
+```
+
+```text
+indexed 7 documents, 66 distinct terms -> sample.index
+```
+
+A one-word query, ranked by relevance:
+
+```bash
+uv run search-engine search sample.index "computer"
+```
+
+```text
+  1. 0.7397  document 2
+```
+
+Free text matches any of the terms, and `--limit` truncates from the best end:
+
+```bash
+uv run search-engine search sample.index "term frequency document" --limit 3
+```
+
+```text
+  1. 0.7604  document 5
+  2. 0.1030  document 1
+  3. 0.0347  document 3
+```
+
+A quoted query is a phrase, and requires the terms adjacent and in order:
+
+```bash
+uv run search-engine search sample.index '"computer science department"'
+```
+
+```text
+  1. 0.8541  document 2
+```
+
+Queries are stemmed exactly as documents are, so `connecting` finds a document
+that says `connect`:
+
+```bash
+uv run search-engine search sample.index "connecting"
+```
+
+```text
+  1. 0.4637  document 3
+```
+
+Exit codes follow the shell convention, so this composes in a pipeline: `0`
+found results, `1` found none, `2` the input was wrong.
+
+### Corpus format
+
+A sequence of page records. Content outside them is ignored, so a dump wrapped
+in a root element also works.
+
+```xml
+<page><id>1</id><title>Inverted index</title><text>An inverted index maps each term to...</text></page>
+<page><id>2</id><title>Computer science</title><text>Computer science is the study of...</text></page>
+```
+
+## Design constraints
+
+1. **No runtime dependencies.** `project.dependencies` is empty and stays that
+   way. Anything added needs an architecture decision record explaining where
+   the standard library fell short.
+2. **Development dependencies are unrestricted**, and are used as verification
+   instruments rather than implementation shortcuts. The clearest case: the
+   from-scratch Porter stemmer is verified against an independent
+   implementation as a differential oracle, with zero disagreements across
+   34,814 words.
+3. **Every claim carries a measurement.** Index sizes, build times and query
+   latencies in the documentation come from a reproducible command in
+   `benchmarks/`, never from an estimate.
+4. **Documents and queries are processed by the same code path.** If the two
+   ever diverge, queries produce terms the index never stored and the engine
+   silently returns nothing.
 
 ## Quality gates
 
@@ -96,20 +166,51 @@ uv run pre-commit install
 ```text
 src/search_engine/   the package, standard library only
 tests/               unit and property-based tests
+tests/fixtures/      a small committed corpus
 docs/                how each mechanism works, and what it costs
 docs/adr/            architecture decision records
 benchmarks/          measurement scripts
-scripts/             corpus preparation utilities
 ```
 
 ## Documentation
+
+Each of these explains one mechanism from first principles: what it is, why it
+exists, how it works internally, what it costs as measured, and what the
+alternatives are.
 
 - [Tokenization](docs/01-tokenization.md)
 - [Stemming](docs/02-stemming.md)
 - [The inverted index](docs/03-inverted-index.md)
 - [Querying](docs/04-querying.md)
 - [Stopwords](docs/05-stopwords.md)
+- [Ranking with TF-IDF](docs/06-ranking.md)
+- [Reading a corpus, and saving the index](docs/07-corpus-and-persistence.md)
+- [Measuring retrieval quality](docs/08-evaluation.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
+
+## Measured
+
+Everything below came from a script in `benchmarks/`, not from an estimate.
+
+| | |
+| --- | --- |
+| Tokenizer | 21.1 MB/s |
+| Stemmer | 128,688 words/s, 2.2x an independent implementation |
+| Index build | 110,396 tokens/s, 1.1 MB/s |
+| Index memory | 131 bytes per posting, 9.4x the source text |
+| Ranking | 1.7 microseconds per candidate |
+
+Two findings worth the space:
+
+**The textbook phrase-query optimisation was slower than not doing it**, losing
+five cases out of six, because sorting the position sets by size has to build
+every set before it can compare their lengths. Rebuilt to construct them lazily,
+it wins 1.8x on the cases that are actually slow.
+
+**Ranking was 939x too slow before it was measured.** Scoring a document by
+building its full vector costs a pass over the whole vocabulary, projecting to
+737 seconds per query on a realistic index. Precomputing document vector lengths
+once brings it to 5.2 ms.
 
 ## Acknowledgements
 
