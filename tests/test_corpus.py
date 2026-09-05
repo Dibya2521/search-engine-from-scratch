@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from search_engine.corpus import CorpusFormatError, Document, read
@@ -124,6 +124,10 @@ def test_the_result_is_the_same_at_every_chunk_size(chunk_size: int) -> None:
     assert list(read(FIXTURE, chunk_size=chunk_size)) == expected
 
 
+# Writes a file per generated example, so the timing measures the disk rather
+# than the code. Hypothesis deadlines catch code that goes pathologically slow
+# on some input, which is a real signal for a pure function and noise here.
+@settings(deadline=None)
 @given(
     st.lists(
         st.tuples(

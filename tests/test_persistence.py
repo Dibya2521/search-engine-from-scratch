@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from search_engine.index import InvertedIndex
@@ -125,6 +125,10 @@ def test_a_version_bump_is_detected(tmp_path: Path) -> None:
         load(path)
 
 
+# Writes a file per generated example, so the timing measures the disk rather
+# than the code. Hypothesis deadlines catch code that goes pathologically slow
+# on some input, which is a real signal for a pure function and noise here.
+@settings(deadline=None)
 @given(st.lists(st.text(), min_size=1, max_size=6))
 def test_any_index_round_trips_unchanged(
     tmp_path_factory: pytest.TempPathFactory, texts: list[str]
@@ -140,6 +144,10 @@ def test_any_index_round_trips_unchanged(
         assert restored.postings(term) == index.postings(term)
 
 
+# Writes a file per generated example, so the timing measures the disk rather
+# than the code. Hypothesis deadlines catch code that goes pathologically slow
+# on some input, which is a real signal for a pure function and noise here.
+@settings(deadline=None)
 @given(st.lists(st.text(), min_size=1, max_size=6))
 def test_queries_behave_the_same_before_and_after_a_round_trip(
     tmp_path_factory: pytest.TempPathFactory, texts: list[str]
