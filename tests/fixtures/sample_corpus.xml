@@ -1,0 +1,7 @@
+<page><id>1</id><title>Inverted index</title><text>An inverted index maps each term to the documents and positions where it occurs. It is the data structure that makes keyword search possible at any corpus size.</text></page>
+<page><id>2</id><title>Computer science</title><text>Computer science is the study of computation. The computer science department teaches algorithms and data structures.</text></page>
+<page><id>3</id><title>Porter stemmer</title><text>The Porter stemming algorithm reduces inflected words to a common form, so connect and connecting meet on one term.</text></page>
+<page><id>4</id><title>Gardening</title><text>Gardening involves growing plants in a garden. Roses and tulips are popular flowers.</text></page>
+<page><id>5</id><title>Term frequency</title><text>Term frequency and inverse document frequency together weight how well a term describes a document. Rare terms weigh more.</text></page>
+<page><id>6</id><title>Special characters &amp; entities</title><text>An ampersand &amp; a less-than &lt; sign should survive unescaping.</text></page>
+<page><id>7</id><title>Empty body</title><text></text></page>

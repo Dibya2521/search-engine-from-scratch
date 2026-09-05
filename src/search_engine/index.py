@@ -50,6 +50,32 @@ class InvertedIndex:
         self._postings: dict[str, dict[int, list[int]]] = {}
         self._document_ids: set[int] = set()
 
+    @classmethod
+    def from_postings(
+        cls,
+        document_ids: Iterable[int],
+        postings: Mapping[str, Mapping[int, Sequence[int]]],
+    ) -> InvertedIndex:
+        """Rebuild an index from stored postings, bypassing analysis.
+
+        The load path. Stored terms are already analyzed, and re-analyzing them
+        would change them, because stemming is not idempotent.
+
+        Document identifiers are passed separately because a document holding
+        no terms appears in no postings list, yet must still count towards the
+        total used to weight rare terms.
+        """
+        index = cls()
+        index._document_ids = set(document_ids)
+        index._postings = {
+            term: {
+                document_id: list(positions)
+                for document_id, positions in entries.items()
+            }
+            for term, entries in postings.items()
+        }
+        return index
+
     def add_document(self, document_id: int, text: str) -> None:
         """Analyze a document and record every term occurrence in it.
 
@@ -78,6 +104,15 @@ class InvertedIndex:
     def terms(self) -> Iterable[str]:
         """Every distinct term, in the order first encountered."""
         return self._postings.keys()
+
+    @property
+    def document_ids(self) -> Iterable[int]:
+        """Every indexed identifier, including documents holding no terms.
+
+        Those cannot be recovered from the postings, since they appear in none,
+        so anything saving or iterating the corpus needs them from here.
+        """
+        return frozenset(self._document_ids)
 
     def postings(self, term: str) -> Mapping[int, Sequence[int]]:
         """Return document identifiers to increasing positions, empty if unknown.

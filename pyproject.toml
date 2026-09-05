@@ -67,10 +67,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # A bare assert and a bare number read better in a test.
-"tests/**/*.py" = ["D103", "PLR2004", "S101"]
+"tests/**/*.py" = ["D103", "PLR2004", "S101", "S603"]
 # Not importable, may print, and seed a plain RNG for reproducible data.
 "benchmarks/**/*.py" = ["INP001", "S311", "T201"]
 "scripts/**/*.py" = ["INP001", "S311", "T201"]
+# A command line tool writes to stdout; that is the whole point of it.
+"src/search_engine/cli.py" = ["T201"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
