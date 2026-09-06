@@ -38,6 +38,44 @@ named, so the claim can be re-checked rather than believed.
   grade rather than a yes or no, which lets it separate two rankings that
   retrieved the same documents in a different order. Average precision scores
   both of those 1.0; nDCG scores them 1.0 and 0.80.
+- `search_engine.bm25`, a BM25 scorer, and `--scorer` on the `search` command to
+  choose between it and TF-IDF. BM25 saturates term frequency so repeated words
+  stop helping, and corrects document length explicitly through a tunable
+  parameter rather than implicitly through the cosine.
+- `BaseRanker`, holding what does not depend on the scoring formula, so two
+  scorers see the same candidates and the same selection rule and any difference
+  in results is caused by the formula alone.
+- `evaluation.sign_test`, an exact two-sided sign test, so a difference between
+  two systems can be reported with whether it is distinguishable from chance.
+- `benchmarks/ranking_quality.py`, which compares the two scorers over the
+  judgement set and reports both a sign test and a paired permutation test.
+
+### Changed
+
+- Nothing about the default ranking. See below.
+
+### Measured
+
+- **BM25 did not beat TF-IDF on this collection, and the default did not
+  change.** Mean average precision 0.7485 to 0.7586 (+1.3%), nDCG@10 0.8660 to
+  0.8772 (+1.3%), mean reciprocal rank 0.9788 to 0.9818 (+0.3%), but
+  precision@5 0.5921 to 0.5848 (-1.2%). Per query BM25 wins 14, loses 12, ties
+  29. Sign test p = 0.845, paired permutation test p = 0.3275. The rule set down
+  before the measurement was that BM25 would be adopted only if it proved
+  better, so TF-IDF remains the default and BM25 ships as an option. Reproduce
+  with `uv run python benchmarks/ranking_quality.py`.
+- **The collection, not the scorer, is the limiting factor.** TF-IDF already
+  achieves a mean reciprocal rank of 0.979, meaning the first result is relevant
+  for nearly every query, so there is almost no headroom for a better scorer to
+  occupy.
+- **BM25 does fix the case that motivated it.** On the recorded example where a
+  document is one query term repeated five times, its score falls from 72 percent
+  of the winning document's to 52 percent.
+- **The classic BM25 inverse document frequency would have produced negative
+  weights on this corpus.** Three of 1,061 terms, worst case `document` at
+  -0.704, present in 47 of 70 documents. A negative weight penalises a document
+  for containing a query term, so the variant with an added constant is used
+  instead.
 
 ## [0.1.0] - 2026-09-05
 

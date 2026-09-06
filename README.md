@@ -25,9 +25,10 @@ Complete and working end to end.
 | One-word and free-text queries | done |
 | Phrase queries | done |
 | TF-IDF ranking and cosine similarity | done |
+| BM25 ranking | done |
 | Retrieval quality evaluation | done |
 
-365 tests, 100 percent branch coverage, verified on Python 3.12, 3.13 and 3.14.
+450 tests, 100 percent branch coverage, verified on Python 3.12, 3.13 and 3.14.
 
 ## Requirements
 
@@ -99,6 +100,13 @@ uv run search-engine search sample.index '"computer science department"'
 
 ```text
   1. 0.8541  document 2
+```
+
+Two ranking functions are available. TF-IDF is the default; BM25 is selectable
+and scores the same results differently:
+
+```bash
+uv run search-engine search sample.index "computer science" --scorer bm25
 ```
 
 Queries are stemmed exactly as documents are, so `connecting` finds a document
@@ -184,9 +192,11 @@ alternatives are.
 - [Querying](docs/04-querying.md)
 - [Stopwords](docs/05-stopwords.md)
 - [Ranking with TF-IDF](docs/06-ranking.md)
+- [BM25](docs/09-bm25.md)
 - [Reading a corpus, and saving the index](docs/07-corpus-and-persistence.md)
 - [Measuring retrieval quality](docs/08-evaluation.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
+- [ADR 0002: BM25 alongside TF-IDF](docs/adr/0002-bm25-alongside-tf-idf.md)
 
 What changed between versions, and why, is in the
 [changelog](CHANGELOG.md).
@@ -209,6 +219,15 @@ Two findings worth the space:
 five cases out of six, because sorting the position sets by size has to build
 every set before it can compare their lengths. Rebuilt to construct them lazily,
 it wins 1.8x on the cases that are actually slow.
+
+**BM25 did not beat TF-IDF on this project's own test collection.** It wins on
+three of four metrics by about one percent, loses on the fourth, and wins 14
+queries against 12. A sign test gives p = 0.845 and a paired permutation test
+p = 0.33, so the difference cannot be told from chance. TF-IDF therefore remains
+the default and BM25 ships as an option, which is what the rule written before
+the measurement said to do. The finding underneath it is that the collection is
+too easy to decide the question: the first result is already relevant for
+essentially every query.
 
 **Ranking was 939x too slow before it was measured.** Scoring a document by
 building its full vector costs a pass over the whole vocabulary, projecting to

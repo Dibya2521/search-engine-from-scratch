@@ -12,21 +12,31 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from search_engine import __version__
+from search_engine.bm25 import BM25Ranker
 from search_engine.corpus import CorpusFormatError, read
 from search_engine.index import InvertedIndex
 from search_engine.persistence import IndexFormatError, load, save
 from search_engine.query import search
-from search_engine.ranking import Ranker
+from search_engine.ranking import BaseRanker, Ranker
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 EXIT_OK = 0
 EXIT_NO_RESULTS = 1
 EXIT_BAD_INPUT = 2
+
+# TF-IDF remains the default because the comparison between the two did not
+# find a difference distinguishable from chance on the collection available.
+# See docs/09-bm25.md.
+SCORERS: Final[dict[str, Callable[[InvertedIndex], BaseRanker]]] = {
+    "tfidf": Ranker,
+    "bm25": BM25Ranker,
+}
+DEFAULT_SCORER = "tfidf"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("index", type=Path, help="index file to read")
     find.add_argument("query", help='terms, or "a quoted phrase"')
     find.add_argument("--limit", type=int, default=10, help="results to show")
+    find.add_argument(
+        "--scorer",
+        choices=sorted(SCORERS),
+        default=DEFAULT_SCORER,
+        help="ranking function to score results with",
+    )
 
     return parser
 
@@ -67,7 +83,7 @@ def build_index(corpus: Path, output: Path) -> int:
     return EXIT_OK
 
 
-def run_query(index_path: Path, query: str, limit: int) -> int:
+def run_query(index_path: Path, query: str, limit: int, scorer: str) -> int:
     """Search an index and print ranked results."""
     try:
         index = load(index_path)
@@ -78,7 +94,7 @@ def run_query(index_path: Path, query: str, limit: int) -> int:
     if not candidates:
         print("no matching documents")
         return EXIT_NO_RESULTS
-    ranked = Ranker(index).rank(query, candidates, limit=limit)
+    ranked = SCORERS[scorer](index).rank(query, candidates, limit=limit)
     if not ranked:
         print("no matching documents")
         return EXIT_NO_RESULTS
@@ -97,7 +113,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "index":
         return build_index(arguments.corpus, arguments.output)
     if arguments.command == "search":
-        return run_query(arguments.index, arguments.query, arguments.limit)
+        return run_query(
+            arguments.index, arguments.query, arguments.limit, arguments.scorer
+        )
     parser.print_help()
     return EXIT_OK
 

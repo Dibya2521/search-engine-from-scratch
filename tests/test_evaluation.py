@@ -15,6 +15,7 @@ from search_engine.evaluation import (
     precision_at_k,
     recall_at_k,
     reciprocal_rank,
+    sign_test,
 )
 
 
@@ -220,3 +221,30 @@ def test_normalized_gain_stays_within_zero_and_one(
     retrieved: list[int], grades: dict[int, int], k: int
 ) -> None:
     assert 0.0 <= normalized_discounted_cumulative_gain(retrieved, grades, k) <= 1.0
+
+
+@pytest.mark.parametrize(
+    ("differences", "expected"),
+    [
+        ([], 1.0),
+        ([0.0, 0.0], 1.0),
+        ([1.0], 1.0),
+        ([1.0, 1.0], 0.5),
+        ([1.0, -1.0], 1.0),
+        ([1.0] * 10, 2 / 2**10),
+        # Ties carry no information and are dropped before counting.
+        ([1.0, 1.0, 0.0, 0.0, 0.0], 0.5),
+    ],
+)
+def test_sign_test(differences: list[float], expected: float) -> None:
+    assert sign_test(differences) == pytest.approx(expected)
+
+
+def test_the_sign_test_ignores_how_large_a_difference_is() -> None:
+    """Its defining property, and equally its weakness."""
+    assert sign_test([0.001, 0.001, -50.0]) == sign_test([50.0, 50.0, -0.001])
+
+
+@given(st.lists(st.floats(-10, 10), max_size=20))
+def test_a_p_value_is_always_a_probability(differences: list[float]) -> None:
+    assert 0.0 <= sign_test(differences) <= 1.0

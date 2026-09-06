@@ -1,0 +1,144 @@
+"""BM25 scoring, the probabilistic alternative to TF-IDF.
+
+BM25 corrects two properties of TF-IDF that do not match how relevance behaves.
+
+Term frequency saturates. Under TF-IDF a document containing a term twenty
+times scores twenty times one containing it once. BM25 divides by a quantity
+that grows with the term frequency, so each additional occurrence contributes
+less than the one before and the score approaches a limit.
+
+Document length is corrected explicitly. Each document's length is compared
+against the corpus average, so a term occurring three times in a short document
+counts for more than the same three occurrences in a long one.
+
+The score of a document for a query is the sum over query terms of::
+
+    idf(term) * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl / avgdl))
+
+where ``tf`` is the term's frequency in the document, ``dl`` the document's
+length in terms and ``avgdl`` the corpus average. ``k1`` controls how quickly
+term frequency saturates and ``b`` how strongly length is corrected.
+
+Both quantities BM25 needs are already stored by the index: term frequency is
+the length of a position list, and document length is the sum of a document's
+position list lengths.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Final
+
+from search_engine.ranking import BaseRanker
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from search_engine.index import InvertedIndex
+
+# Conventional defaults from the literature. k1 is usually quoted as a range of
+# 1.2 to 2.0 and b as 0.75; these are the values most implementations ship.
+K1: Final = 1.2
+B: Final = 0.75
+
+
+def bm25_inverse_document_frequency(index: InvertedIndex, term: str) -> float:
+    """Return the BM25 inverse document frequency of a term.
+
+    ``log(1 + (N - df + 0.5) / (df + 0.5))``. The original formulation omits
+    the ``1 +``, which makes the value negative for any term present in more
+    than half the documents. A negative weight means a document is penalised
+    for containing a common term, so a document containing every query term can
+    rank below one containing fewer. The ``1 +`` keeps the value positive for
+    every possible document frequency and is what current implementations use.
+
+    An unindexed term returns 0.0, matching the TF-IDF function.
+    """
+    frequency = index.document_frequency(term)
+    if frequency == 0:
+        return 0.0
+    total = index.document_count
+    return math.log(1 + (total - frequency + 0.5) / (frequency + 0.5))
+
+
+class BM25Ranker(BaseRanker):
+    """Scores documents with BM25.
+
+    Args:
+        index: A finished index. Adding documents afterwards invalidates the
+            precomputed statistics and is detected rather than ignored.
+        k1: Term frequency saturation. Larger values make repeated occurrences
+            count for more; 0.0 reduces the term frequency component to a
+            constant, leaving only the inverse document frequency.
+        b: Length correction, from 0.0 for none to 1.0 for full.
+    """
+
+    def __init__(self, index: InvertedIndex, k1: float = K1, b: float = B) -> None:
+        super().__init__(index)
+        self._k1 = k1
+        self._b = b
+        # BM25 needs its own inverse document frequency, not the TF-IDF one the
+        # base class computes, because the two formulas differ.
+        self._idf = {
+            term: bm25_inverse_document_frequency(index, term) for term in index.terms
+        }
+        self._lengths = self._document_lengths()
+        self._average_length = self._mean_length()
+
+    def _document_lengths(self) -> dict[int, int]:
+        """Return each document's length in terms, computed in one pass.
+
+        Length is measured after analysis, so removed stopwords do not count.
+        This is the right measure here because it is the number of terms the
+        document actually contributes to the index.
+        """
+        lengths: dict[int, int] = {}
+        for term in self._index.terms:
+            for document_id, positions in self._index.postings(term).items():
+                lengths[document_id] = lengths.get(document_id, 0) + len(positions)
+        return lengths
+
+    def _mean_length(self) -> float:
+        """Return the mean document length, or 0.0 for an empty corpus.
+
+        Documents holding no terms are included in the average, since they are
+        part of the corpus and the index counts them.
+        """
+        if self._built_for == 0:
+            return 0.0
+        return sum(self._lengths.values()) / self._built_for
+
+    def query_weights(self, terms: Sequence[str]) -> dict[str, float]:
+        """Return the inverse document frequency of each distinct query term.
+
+        Repetition within the query is ignored. The full formulation includes a
+        query term frequency factor controlled by a third parameter, which
+        matters only for queries long enough to repeat a term, and typed
+        queries are not.
+        """
+        return {term: self._idf.get(term, 0.0) for term in terms}
+
+    def score(self, weights: Mapping[str, float], document_id: int) -> float:
+        """Return the BM25 score of a document against a weighted query.
+
+        Raises:
+            StaleRankerError: If the index changed after this ranker was built.
+        """
+        self._check_fresh()
+        length = self._lengths.get(document_id, 0)
+        total = 0.0
+        for term, weight in weights.items():
+            positions = self._index.postings(term).get(document_id)
+            if positions is not None:
+                total += weight * self._saturate(len(positions), length)
+        return total
+
+    def _saturate(self, frequency: int, length: int) -> float:
+        """Return the length-corrected, saturating term frequency component.
+
+        The average length cannot be zero here: this is reached only for a
+        document that contains the term, and such a document has a non-zero
+        length, so the corpus average is non-zero too.
+        """
+        correction = 1 - self._b + self._b * length / self._average_length
+        return (frequency * (self._k1 + 1)) / (frequency + self._k1 * correction)

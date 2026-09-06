@@ -171,3 +171,31 @@ def normalized_discounted_cumulative_gain(
     if ideal == 0.0:
         return 0.0
     return discounted_cumulative_gain(retrieved, grades, k) / ideal
+
+
+def sign_test(differences: Iterable[float]) -> float:
+    """Return the two-sided p-value of a sign test over paired differences.
+
+    Answers whether one system beating another across a query set could
+    plausibly be chance. Counts how many queries each system won, ignoring
+    ties, and asks how likely a split at least this lopsided would be if the
+    two systems were equally good and each query were a coin toss.
+
+    A p-value near 1.0 means the result is indistinguishable from chance. The
+    conventional threshold for reporting a difference is 0.05.
+
+    The test uses only the sign of each difference, never its size, so it
+    cannot be distorted by one query with a huge swing. That insensitivity is
+    also its weakness: a system that wins narrowly on many queries and loses
+    heavily on a few scores the same as one that does the reverse.
+
+    Returns 1.0 when every query is a tie, since there is nothing to explain.
+    """
+    signs = [one for one in differences if one != 0]
+    total = len(signs)
+    if total == 0:
+        return 1.0
+    wins = sum(1 for one in signs if one > 0)
+    extreme = max(wins, total - wins)
+    tail = sum(math.comb(total, count) for count in range(extreme, total + 1))
+    return min(1.0, 2 * tail / 2**total)

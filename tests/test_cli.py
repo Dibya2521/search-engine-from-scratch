@@ -197,3 +197,47 @@ def test_index_then_search_works_as_two_separate_processes(tmp_path: Path) -> No
         check=True,
     )
     assert "document 2" in query.stdout
+
+
+@pytest.mark.parametrize("scorer", ["tfidf", "bm25"])
+def test_either_scorer_finds_the_right_document(
+    built_index: Path, capsys: pytest.CaptureFixture[str], scorer: str
+) -> None:
+    code = main(
+        [
+            "search",
+            str(built_index),
+            '"computer science department"',
+            "--scorer",
+            scorer,
+        ]
+    )
+    assert code == EXIT_OK
+    assert "document 2" in capsys.readouterr().out
+
+
+def test_the_two_scorers_give_different_scores(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Otherwise the flag would be wired up but doing nothing."""
+    outputs: list[str] = []
+    for scorer in ("tfidf", "bm25"):
+        assert main(["search", str(built_index), "computer", "--scorer", scorer]) == 0
+        outputs.append(capsys.readouterr().out)
+    assert outputs[0] != outputs[1]
+
+
+def test_the_default_scorer_is_tf_idf(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Recorded as a test because the comparison did not justify changing it."""
+    assert main(["search", str(built_index), "computer"]) == EXIT_OK
+    without = capsys.readouterr().out
+    assert main(["search", str(built_index), "computer", "--scorer", "tfidf"]) == 0
+    assert capsys.readouterr().out == without
+
+
+def test_an_unknown_scorer_is_rejected(built_index: Path) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["search", str(built_index), "computer", "--scorer", "nonsense"])
+    assert exit_info.value.code == 2
