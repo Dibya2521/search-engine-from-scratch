@@ -16,6 +16,14 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-09-06
+
+Relevance, measured rather than assumed. The headline is a null result: the new
+ranking function did not beat the old one on this project's own test
+collection, so the default did not change.
+
 ### Added
 
 - This changelog. The engine reached a working state through thirteen commits
@@ -141,5 +149,6 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Dibya2521/search-engine-from-scratch/releases/tag/v0.1.0
