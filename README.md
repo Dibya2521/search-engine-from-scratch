@@ -188,6 +188,9 @@ alternatives are.
 - [Measuring retrieval quality](docs/08-evaluation.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 
+What changed between versions, and why, is in the
+[changelog](CHANGELOG.md).
+
 ## Measured
 
 Everything below came from a script in `benchmarks/`, not from an estimate.
