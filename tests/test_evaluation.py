@@ -8,9 +8,13 @@ from hypothesis import strategies as st
 
 from search_engine.evaluation import (
     average_precision,
+    discounted_cumulative_gain,
     mean_average_precision,
+    mean_reciprocal_rank,
+    normalized_discounted_cumulative_gain,
     precision_at_k,
     recall_at_k,
+    reciprocal_rank,
 )
 
 
@@ -123,3 +127,96 @@ def test_recall_never_falls_as_k_grows(
     """More results can only find more of what was relevant."""
     values = [recall_at_k(retrieved, relevant, k) for k in range(len(retrieved) + 1)]
     assert values == sorted(values)
+
+
+@pytest.mark.parametrize(
+    ("retrieved", "relevant", "expected"),
+    [
+        ([1, 2, 3], {1}, 1.0),
+        ([1, 2, 3], {2}, 0.5),
+        ([1, 2, 3], {3}, 1 / 3),
+        ([1, 2, 3], {2, 3}, 0.5),
+        ([1, 2, 3], {9}, 0.0),
+        ([], {1}, 0.0),
+        ([1], set[int](), 0.0),
+    ],
+)
+def test_reciprocal_rank(
+    retrieved: list[int], relevant: set[int], expected: float
+) -> None:
+    assert reciprocal_rank(retrieved, relevant) == pytest.approx(expected)
+
+
+def test_mean_reciprocal_rank_averages_across_queries() -> None:
+    assert mean_reciprocal_rank([([1, 2], {1}), ([1, 2], {2})]) == pytest.approx(0.75)
+
+
+def test_mean_reciprocal_rank_of_nothing_is_zero() -> None:
+    assert mean_reciprocal_rank([]) == 0.0
+
+
+def test_gain_is_discounted_by_the_logarithm_of_the_rank() -> None:
+    """Rank 1 divides by log2(2) = 1, rank 3 by log2(4) = 2."""
+    assert discounted_cumulative_gain([5, 9, 6], {5: 3, 6: 2}, 3) == pytest.approx(
+        3 / 1.0 + 2 / 2.0
+    )
+
+
+def test_gain_counts_an_unjudged_document_as_worthless() -> None:
+    assert discounted_cumulative_gain([9], {1: 3}, 5) == 0.0
+
+
+def test_gain_stops_at_k() -> None:
+    assert discounted_cumulative_gain([9, 1], {1: 3}, 1) == 0.0
+
+
+def test_gain_of_no_results_is_zero() -> None:
+    assert discounted_cumulative_gain([], {1: 3}, 5) == 0.0
+
+
+@pytest.mark.parametrize("k", [0, -1])
+def test_gain_needs_a_positive_k(k: int) -> None:
+    assert discounted_cumulative_gain([1], {1: 3}, k) == 0.0
+
+
+def test_the_ideal_ranking_normalizes_to_one() -> None:
+    grades = {1: 3, 2: 2, 3: 1}
+    assert normalized_discounted_cumulative_gain([1, 2, 3], grades, 3) == pytest.approx(
+        1.0
+    )
+
+
+def test_a_reversed_ranking_scores_below_the_ideal() -> None:
+    grades = {1: 3, 2: 2, 3: 1}
+    assert normalized_discounted_cumulative_gain([3, 2, 1], grades, 3) < 1.0
+
+
+def test_normalizing_without_any_grades_is_zero() -> None:
+    assert normalized_discounted_cumulative_gain([1, 2], {}, 3) == 0.0
+
+
+def test_the_ideal_ranking_includes_documents_that_were_missed() -> None:
+    """Otherwise failing to return a relevant document would cost nothing."""
+    grades = {1: 3, 2: 3}
+    assert normalized_discounted_cumulative_gain([1], grades, 5) < 1.0
+
+
+def test_graded_relevance_sees_an_ordering_that_binary_metrics_cannot() -> None:
+    """The whole reason to grade: both orderings retrieve the same set."""
+    grades = {1: 3, 2: 1}
+    better = normalized_discounted_cumulative_gain([1, 2], grades, 2)
+    worse = normalized_discounted_cumulative_gain([2, 1], grades, 2)
+    relevant = {1, 2}
+    assert average_precision([1, 2], relevant) == average_precision([2, 1], relevant)
+    assert better > worse
+
+
+@given(
+    st.lists(st.integers(0, 20), unique=True, max_size=12),
+    st.dictionaries(st.integers(0, 20), st.integers(0, 3), max_size=12),
+    st.integers(0, 15),
+)
+def test_normalized_gain_stays_within_zero_and_one(
+    retrieved: list[int], grades: dict[int, int], k: int
+) -> None:
+    assert 0.0 <= normalized_discounted_cumulative_gain(retrieved, grades, k) <= 1.0

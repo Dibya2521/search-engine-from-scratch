@@ -30,6 +30,14 @@ named, so the claim can be re-checked rather than believed.
   `tests/fixtures/judgements.jsonl`. The existing seven-document fixture is
   large enough to assert postings by hand and far too small to tell two ranking
   functions apart, which is what this collection exists to do.
+- `search_engine.judgements`, which reads a judgement file and refuses a
+  malformed one. A file silently missing half its labels produces a plausible
+  number that is wrong, which is worse than producing no number.
+- Graded evaluation metrics: discounted cumulative gain and its normalized form,
+  plus reciprocal rank and its mean. nDCG is the first metric here that uses the
+  grade rather than a yes or no, which lets it separate two rankings that
+  retrieved the same documents in a different order. Average precision scores
+  both of those 1.0; nDCG scores them 1.0 and 0.80.
 
 ## [0.1.0] - 2026-09-05
 

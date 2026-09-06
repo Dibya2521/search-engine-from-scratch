@@ -16,18 +16,28 @@ person has marked relevant for a query. They cannot be derived from the corpus.
   which rewards ranking relevant documents *higher* rather than merely
   including them. This is the one that distinguishes two engines returning the
   same set in a different order.
+- **Reciprocal rank**: one divided by the position of the first relevant result.
+  The right measure when a user needs one answer rather than a set of them.
+- **Normalized discounted cumulative gain**: the only metric here that uses
+  *graded* judgements, so that a directly relevant document at position one
+  beats a marginally relevant one there.
 
 Precision and recall trade against each other. Returning every document gives
 perfect recall and useless precision; returning one certain hit gives the
 reverse.
+
+Every function takes results already ranked and judgements already made. None of
+them look at the index, which is deliberate: a metric that could see the engine
+would be measuring itself.
 """
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
     from collections.abc import Set as AbstractSet
 
 
@@ -93,3 +103,71 @@ def mean_average_precision(
     if not scores:
         return 0.0
     return sum(scores) / len(scores)
+
+
+def reciprocal_rank(retrieved: Sequence[int], relevant: AbstractSet[int]) -> float:
+    """One over the rank of the first relevant result, or 0.0 if there is none.
+
+    The measure to use when a query has one right answer and the user stops
+    reading as soon as they find it. It ignores everything after the first hit,
+    which is the point rather than a limitation.
+    """
+    for rank, document_id in enumerate(retrieved, start=1):
+        if document_id in relevant:
+            return 1.0 / rank
+    return 0.0
+
+
+def mean_reciprocal_rank(
+    results: Iterable[tuple[Sequence[int], AbstractSet[int]]],
+) -> float:
+    """Average of the reciprocal ranks across several queries."""
+    scores = [reciprocal_rank(retrieved, relevant) for retrieved, relevant in results]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def discounted_cumulative_gain(
+    retrieved: Sequence[int], grades: Mapping[int, int], k: int
+) -> float:
+    """Sum each result's grade, discounted by the logarithm of its rank.
+
+    Two ideas in one formula. *Gain*: a document graded 3 is worth more than one
+    graded 1, which a binary metric cannot express. *Discount*: a result at rank
+    10 is worth less than the same result at rank 1, because fewer people look
+    at it. Dividing by ``log2(rank + 1)`` gives rank 1 a divisor of 1 and decays
+    slowly after that.
+
+    Documents with no judgement contribute nothing, which treats unjudged as
+    not relevant. That is the standard convention and it is a real assumption:
+    an unjudged document might have been excellent.
+    """
+    if k <= 0:
+        return 0.0
+    return sum(
+        grades.get(document_id, 0) / math.log2(rank + 1)
+        for rank, document_id in enumerate(retrieved[:k], start=1)
+    )
+
+
+def normalized_discounted_cumulative_gain(
+    retrieved: Sequence[int], grades: Mapping[int, int], k: int
+) -> float:
+    """Gain as a fraction of the best gain any ranking of these grades could get.
+
+    Raw gain is not comparable between queries, because a query with six
+    relevant documents can score higher than one with two no matter how well
+    both are ranked. Dividing by the ideal ranking's gain puts every query on
+    the same 0 to 1 scale, which is what makes averaging across queries mean
+    anything.
+
+    The ideal ranking is built from *all* judged documents, including ones the
+    engine failed to return, so that missing a relevant document costs
+    something.
+    """
+    ideal_order = sorted(grades, key=lambda document_id: -grades[document_id])
+    ideal = discounted_cumulative_gain(ideal_order, grades, k)
+    if ideal == 0.0:
+        return 0.0
+    return discounted_cumulative_gain(retrieved, grades, k) / ideal

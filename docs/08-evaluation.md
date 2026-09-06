@@ -133,18 +133,134 @@ follows the engine rather than judging it.
 | **Precision, recall (these)** | the basic trade-off | binary relevant or not |
 | **F1** | one number blending both | the same, plus a choice about their relative weight |
 | **Average precision (this)** | sensitivity to rank order | the same |
-| **nDCG** | graded relevance, and discounting by position | judgements on a scale, not just yes or no |
-| **MRR** | how soon the first correct answer appears | only useful when one answer is wanted |
+| **nDCG (this)** | graded relevance, and discounting by position | judgements on a scale, not just yes or no |
+| **MRR (this)** | how soon the first correct answer appears | only useful when one answer is wanted |
 | **Click-through, dwell time** | what users actually did | live traffic, and it measures the interface as much as the ranking |
 
 **nDCG is the standard in modern retrieval**, because real relevance is graded
-rather than binary: a document can be perfect, useful, or tangential. It needs a
-richer judgement set, which is why these three come first.
+rather than binary: a document can be perfect, useful, or tangential.
+
+## Graded relevance, and the metric that uses it
+
+Everything above treats relevance as yes or no. Real relevance is not: a
+document can be exactly what you wanted, useful, or merely adjacent. Collapsing
+that to a single bit throws away the distinction that separates a good ranking
+from an excellent one.
+
+The judgement file grades on a four-point scale, 0 to 3, where 0 is simply left
+out. Binary metrics read any grade above 0 as relevant, so they still work
+unchanged.
+
+### Discounted cumulative gain
+
+Two ideas, and the name says both of them.
+
+**Gain.** Each result contributes its grade, so a document graded 3 is worth
+three times one graded 1 rather than the same.
+
+**Discount.** A result at rank 10 is worth less than the same result at rank 1,
+because far fewer people ever look at it. Each grade is divided by
+`log2(rank + 1)`, which is 1.0 at rank 1, 1.58 at rank 2, and 3.46 at rank 10.
+The logarithm is the point: the decay is steep among the first few positions,
+where attention actually drops off, and shallow after that.
+
+```text
+DCG@k = sum over the first k results of  grade(result) / log2(rank + 1)
+```
+
+A document with no judgement contributes nothing, which treats unjudged as not
+relevant. That is the standard convention and it is a real assumption worth
+naming: an unjudged document might have been excellent, and a system that
+surfaces documents nobody thought to judge is penalised for it.
+
+### Normalizing it
+
+Raw gain is not comparable between queries. A query with six relevant documents
+can score higher than one with two no matter how badly the first is ranked and
+how perfectly the second is, so averaging raw gain across a query set is
+meaningless.
+
+The fix is to divide by the best score any ordering of those judgements could
+possibly achieve, which is the gain of the ideal ranking, most relevant first.
+That puts every query on a 0 to 1 scale where 1.0 means "no ordering could have
+been better", and only then does averaging across queries mean anything.
+
+**The ideal ranking is built from every judged document, including ones the
+engine never returned.** This is the detail that is easy to get wrong: build it
+from only what came back and a system that returns one perfect result and misses
+five others scores 1.0.
+
+### What it sees that average precision cannot
+
+Given two documents, one graded 3 and one graded 1, both retrieved:
+
+| Order returned | Average precision | nDCG |
+| --- | --- | --- |
+| `[3-graded, 1-graded]` | 1.0 | 1.0 |
+| `[1-graded, 3-graded]` | 1.0 | 0.80 |
+
+Average precision cannot tell these apart, because to a binary metric both
+orderings retrieved the same relevant set at the same ranks. This is exactly the
+case graded judgements exist for, and there is a test asserting it.
+
+### The variant worth knowing
+
+Some formulations use `(2 ** grade - 1)` in place of the grade itself, which
+turns grades 0, 1, 2, 3 into 0, 1, 3, 7 and weights the top grade far more
+heavily. It is common in learning to rank, where the difference between perfect
+and good drives the whole objective.
+
+This implementation uses the linear gain of the original definition, because it
+is the one that can be explained without a second justification, and the choice
+rarely changes which of two systems wins. If it ever does change the answer, that
+is a result worth reporting rather than a parameter worth tuning.
+
+## Reciprocal rank
+
+One divided by the position of the first relevant result: 1.0 if it is first,
+0.5 if second, 0.1 if tenth, 0 if there is none. It ignores everything after the
+first hit, which is the point rather than a limitation.
+
+Use it when a query has one right answer and the user stops reading the moment
+they find it: a navigational search, a lookup, a question with a fact for an
+answer. Use average precision instead when the user wants a set of documents and
+will read several.
+
+## Where the judgements come from
+
+`tests/fixtures/judgements.jsonl` holds 55 queries with 200 graded judgements
+over the 70-document collection in `tests/fixtures/evaluation_corpus.xml`. One
+query per line, as JSON, with `#` comments allowed so the reasoning can live
+beside the labels:
+
+```text
+{"query": "inverted index", "judgements": [[1, 3], [20, 2]]}
+```
+
+The evaluation campaigns use two files instead, one of queries and one of
+judgements keyed by a query identifier. That normalises better. Keeping a query
+beside its own labels is what makes a set of labels reviewable by eye, which
+matters more for a file this size.
+
+**Malformed lines raise rather than being skipped**, and the error carries the
+line number. A judgement file silently missing half its labels produces a
+plausible number that is wrong, and that is worse than no number at all.
+
+Two things about that collection are deliberate. Document lengths span 15 to 331
+words, because over a corpus of uniform length a length-normalising scorer has
+nothing to normalise and the collection could not measure one. And several
+topics appear as both a short definition and a long article, so the ordering
+between them has to be earned.
 
 ## How it connects to everything else
 
 - **Ranking** is the thing being measured. These metrics are the only way to
   tell a scoring improvement from a scoring change.
+- **Relevance judgements** are the input none of this works without, and the one
+  part that cannot be computed. The discipline that makes them worth anything is
+  that they are made *before* the results are seen: a judgement made afterwards
+  reacts to the output rather than assessing the document, and every number
+  derived from it is worthless.
 - **Querying** supplies the candidate set, and recall is bounded by it: a
   document the matcher never returned cannot be ranked into the top k. So a
   recall problem may be a matching problem rather than a scoring one, and these
