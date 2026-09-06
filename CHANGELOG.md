@@ -23,6 +23,8 @@ named, so the claim can be re-checked rather than believed.
   below was reconstructed from the source and the commit history. Keeping it
   from here means the next change can always be compared against the one before
   it.
+- A short contributing guide, stating the five rules the project runs on rather
+  than a submission process, since there is one maintainer.
 
 ## [0.1.0] - 2026-09-05
 

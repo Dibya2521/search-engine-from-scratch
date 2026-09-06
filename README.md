@@ -220,6 +220,13 @@ once brings it to 5.2 ms.
 The design follows the classic inverted index and vector space model treatment
 in Arden Dertat's series on implementing a search engine.
 
+## Contributing
+
+One maintainer, so pull requests are welcome but not expected.
+[CONTRIBUTING.md](CONTRIBUTING.md) is short and states the five rules the
+project runs on, of which the first is that nothing gets installed that could be
+built.
+
 ## License
 
 [MIT](LICENSE)
