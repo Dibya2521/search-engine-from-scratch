@@ -25,6 +25,11 @@ named, so the claim can be re-checked rather than believed.
   it.
 - A short contributing guide, stating the five rules the project runs on rather
   than a submission process, since there is one maintainer.
+- A test collection: seventy documents in `tests/fixtures/evaluation_corpus.xml`
+  and fifty-five queries with graded relevance judgements in
+  `tests/fixtures/judgements.jsonl`. The existing seven-document fixture is
+  large enough to assert postings by hand and far too small to tell two ranking
+  functions apart, which is what this collection exists to do.
 
 ## [0.1.0] - 2026-09-05
 

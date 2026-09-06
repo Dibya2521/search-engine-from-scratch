@@ -1,0 +1,87 @@
+# Relevance judgements for evaluation_corpus.xml.
+#
+# One query per line, as JSON. Blank lines and lines starting with # are
+# ignored, so this file can be annotated by the person maintaining it.
+#
+#   {"query": "...", "judgements": [[document_id, grade], ...]}
+#
+# Grades, the conventional four-point scale:
+#
+#   3  directly about this; the best possible answer
+#   2  substantially covers it
+#   1  partially relevant, or covers it as a secondary topic
+#   0  not relevant, and therefore simply left out
+#
+# Binary metrics such as precision, recall and average precision treat any
+# grade of 1 or more as relevant. Discounted cumulative gain uses the grades
+# themselves, which is the reason for grading rather than marking yes or no.
+#
+# These were assigned by reading the seventy documents and deciding, for each
+# query, which of them a person asking it would want. They were written and
+# committed before any second ranking function existed, which the commit
+# history shows. That order is the whole point: a judgement made after seeing
+# what an engine returned follows the engine instead of judging it, and the
+# comparison it produces is worthless.
+#
+# Queries were chosen to cover what people actually type: single words, two or
+# three word topics, a few natural-language questions, and two queries whose
+# answer is one obviously correct document, which catch an engine that has
+# started drifting. Several topics are covered by both a short definition and a
+# long article, so that the ordering between them has to be earned rather than
+# fallen into.
+
+{"query": "inverted index", "judgements": [[1, 3], [2, 2], [18, 2], [20, 2], [24, 1], [25, 2], [29, 1], [69, 1]]}
+{"query": "forward index", "judgements": [[2, 3], [1, 2]]}
+{"query": "stemming", "judgements": [[4, 3], [5, 2], [6, 3], [52, 2]]}
+{"query": "porter stemmer", "judgements": [[6, 3], [4, 2]]}
+{"query": "lemmatization", "judgements": [[5, 3], [4, 2]]}
+{"query": "tokenization", "judgements": [[3, 3], [4, 1], [47, 2], [52, 3], [66, 2], [67, 1]]}
+{"query": "why remove stopwords", "judgements": [[7, 3], [9, 2], [20, 1], [52, 2]]}
+{"query": "term frequency", "judgements": [[8, 3], [10, 2], [14, 2], [20, 1], [63, 2]]}
+{"query": "inverse document frequency", "judgements": [[9, 3], [10, 2], [42, 1], [63, 2]]}
+{"query": "tf idf weighting", "judgements": [[10, 3], [8, 2], [9, 2], [11, 1], [53, 2]]}
+{"query": "vector space model", "judgements": [[11, 3], [10, 2], [12, 2], [62, 1]]}
+{"query": "cosine similarity", "judgements": [[12, 3], [11, 2], [13, 1]]}
+{"query": "document length normalization", "judgements": [[13, 3], [12, 2], [14, 2], [70, 2]]}
+{"query": "how does bm25 work", "judgements": [[14, 3], [70, 3], [13, 2], [15, 2], [53, 2], [8, 1]]}
+{"query": "bm25 parameters k1 and b", "judgements": [[70, 3], [14, 3], [13, 2]]}
+{"query": "probabilistic retrieval model", "judgements": [[15, 3], [14, 2]]}
+{"query": "boolean queries", "judgements": [[16, 3]]}
+{"query": "phrase query", "judgements": [[17, 3], [18, 3], [19, 2], [1, 1], [51, 1]]}
+{"query": "positional index", "judgements": [[18, 3], [17, 2], [1, 2]]}
+{"query": "ranking terms that appear near each other", "judgements": [[19, 3], [17, 2], [53, 2]]}
+{"query": "postings list", "judgements": [[20, 3], [1, 2], [21, 2], [55, 2], [24, 1], [51, 1]]}
+{"query": "skip pointers", "judgements": [[21, 3], [20, 1]]}
+{"query": "variable byte encoding", "judgements": [[22, 3], [55, 3], [23, 2], [24, 2]]}
+{"query": "delta gap encoding", "judgements": [[23, 3], [55, 3], [22, 2], [24, 2]]}
+{"query": "compressing an index", "judgements": [[24, 3], [22, 3], [23, 3], [55, 3], [20, 2], [18, 1]]}
+{"query": "building an index from a large collection", "judgements": [[25, 3], [26, 2], [54, 2], [27, 1]]}
+{"query": "index segments and merging", "judgements": [[26, 3], [27, 3], [54, 3], [25, 1], [43, 1]]}
+{"query": "log structured merge tree", "judgements": [[27, 3], [26, 2], [54, 2], [45, 1]]}
+{"query": "memory mapped index on disk", "judgements": [[28, 3], [29, 2], [58, 2], [26, 1]]}
+{"query": "term dictionary lookup", "judgements": [[29, 3], [57, 3], [1, 1], [46, 1], [62, 1], [67, 1]]}
+{"query": "front coding string dictionary", "judgements": [[57, 3], [55, 2], [29, 2]]}
+{"query": "wand", "judgements": [[30, 3], [31, 2]]}
+{"query": "early termination top k", "judgements": [[31, 3], [30, 3], [51, 2]]}
+{"query": "query processing", "judgements": [[51, 3], [31, 2], [17, 1], [20, 1], [64, 1]]}
+{"query": "text analysis pipeline", "judgements": [[52, 3], [3, 2], [4, 1], [7, 1], [47, 1]]}
+{"query": "precision and recall", "judgements": [[32, 3], [33, 2], [56, 2], [59, 2], [60, 2], [34, 1]]}
+{"query": "how to evaluate a ranking", "judgements": [[33, 3], [34, 3], [32, 3], [56, 3], [35, 2], [36, 2], [68, 1]]}
+{"query": "mean average precision", "judgements": [[33, 3], [32, 2], [56, 2]]}
+{"query": "discounted cumulative gain", "judgements": [[34, 3], [33, 2], [56, 2]]}
+{"query": "relevance judgements", "judgements": [[35, 3], [36, 3], [56, 3], [65, 2], [33, 1]]}
+{"query": "test collection", "judgements": [[36, 3], [35, 3], [56, 2], [61, 1]]}
+{"query": "query expansion with synonyms", "judgements": [[37, 3], [38, 1]]}
+{"query": "spelling correction for queries", "judgements": [[38, 3], [39, 3], [37, 1]]}
+{"query": "edit distance", "judgements": [[39, 3], [38, 2]]}
+{"query": "search result snippets", "judgements": [[40, 3], [2, 2], [51, 2]]}
+{"query": "web crawler", "judgements": [[41, 3]]}
+{"query": "distributed search across shards", "judgements": [[42, 3], [58, 3], [9, 1]]}
+{"query": "caching search results", "judgements": [[43, 3], [58, 2], [26, 1]]}
+{"query": "hash table collisions", "judgements": [[44, 3], [57, 2], [29, 1]]}
+{"query": "b tree database index", "judgements": [[45, 3], [27, 2], [46, 1]]}
+{"query": "binary search sorted array", "judgements": [[46, 3], [29, 2], [57, 2], [45, 1]]}
+{"query": "unicode normalization", "judgements": [[47, 3], [52, 2], [3, 1]]}
+{"query": "regular expression denial of service", "judgements": [[48, 3]]}
+{"query": "growing tomatoes", "judgements": [[49, 3]]}
+{"query": "making filter coffee", "judgements": [[50, 3]]}
