@@ -16,7 +16,19 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `benchmarks/index_format.py`, measuring what an index costs on disk and how
+  long it takes to read back. Added before the format changes, so the comparison
+  afterwards is against a recorded number rather than a remembered one.
+
+### Measured
+
+- **The plain-text index format, as a baseline.** On a 10,000 document synthetic
+  corpus of 10.2 MB with 8,000 distinct terms and 1,000,000 stored occurrences:
+  file size 6.63 MB (0.65x the source text), 6.6 bytes per stored occurrence,
+  1.902 s to save and 2.654 s to load, a load throughput of 2.5 MB/s. Reproduce
+  with `uv run python benchmarks/index_format.py`.
 
 ## [0.2.0] - 2026-09-06
 
