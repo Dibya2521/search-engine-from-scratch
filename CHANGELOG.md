@@ -29,6 +29,46 @@ named, so the claim can be re-checked rather than believed.
   file size 6.63 MB (0.65x the source text), 6.6 bytes per stored occurrence,
   1.902 s to save and 2.654 s to load, a load throughput of 2.5 MB/s. Reproduce
   with `uv run python benchmarks/index_format.py`.
+- `search_engine.codecs`, variable-byte and delta encoding built from scratch.
+- **Index format version 2**: binary, compressed, checksummed, and stamped with
+  a fingerprint of the analysis configuration. `save` writes it; `load` reads
+  version 1 as well, so an index written by an older build still opens.
+- `search_engine.analysis.fingerprint`, a digest of everything that determines
+  which terms get produced: the pipeline version, the token pattern, the stemmer
+  variant and the stopword list.
+- `save_text`, which writes the version 1 format, kept so the two stay
+  comparable on the same index.
+- `IndexCorruptError` and `AnalyzerMismatchError`.
+
+### Changed
+
+- **`save` now writes a binary file.** The index is no longer readable with
+  `head`, which was one of three stated reasons for choosing a text format. The
+  header line stays ASCII so the file is still identifiable. Use `save_text` for
+  the old format.
+- **An index built by a different tokenizer, stopword list or stemmer is now
+  refused rather than loaded.** This is the guard against the most common silent
+  failure in a search system: old documents analyzed one way, new queries
+  analyzed another, nothing raising, and nothing matching. Changing the stopword
+  list now invalidates every existing index, which is intended.
+
+### Measured
+
+- **The compressed format is 58.9 percent smaller**, 2.722 MB against 6.629 MB
+  on 10,000 documents and 1,000,000 stored occurrences, or 2.72 bytes per
+  occurrence against 6.63.
+- **It is also slower to load**, by +23.4% on the recorded run and between +6%
+  and +23% across repeated runs. Only the direction is reliable; the magnitude
+  is inside this benchmark's noise. Save is within noise either way.
+- **The textbook justification for index compression did not hold here.** It is
+  usually said to save time because fewer bytes are read from disk. That holds
+  when I/O dominates, and a 6.6 MB file on a warm page cache is not read from
+  disk at all.
+- **Two constant-factor fixes, both measured.** The first implementation was
+  +47.9% load and +136.6% save. Decoding a sequence in one inline loop rather
+  than a function call per number measured 0.0167 s against 0.0404 s for 200,000
+  values, a factor of 2.4 for identical output. A single-byte fast path for gaps
+  below 128 brought save back within noise.
 
 ## [0.2.0] - 2026-09-06
 

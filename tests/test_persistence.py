@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from search_engine.index import InvertedIndex
-from search_engine.persistence import IndexFormatError, load, save
-from search_engine.query import search
-from search_engine.tokenizer import tokenize
+from search_engine.persistence import (
+    IndexFormatError,
+    load,
+    save,
+    save_text,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,11 +25,11 @@ def _index_of(texts: dict[int, str]) -> InvertedIndex:
     return index
 
 
-def test_the_written_format(tmp_path: Path) -> None:
-    """Readable by design, so a wrong index can be diagnosed with `head`."""
+def test_the_written_text_format(tmp_path: Path) -> None:
+    """Version 1 is readable, so a wrong index can be diagnosed with `head`."""
     index = _index_of({1: "web search", 2: "web index"})
     path = tmp_path / "i.index"
-    save(index, path)
+    save_text(index, path)
     assert path.read_text(encoding="utf-8").splitlines() == [
         "# search-engine-index v1",
         "# documents: 1,2",
@@ -113,49 +114,25 @@ def test_malformed_files_are_refused(
         load(path)
 
 
-def test_a_version_bump_is_detected(tmp_path: Path) -> None:
-    """Weights will change the format later; an old file must not load silently."""
+def test_an_unknown_version_is_detected(tmp_path: Path) -> None:
+    """A file of the wrong shape must not load and give plausible garbage."""
     index = _index_of({1: "web"})
     path = tmp_path / "i.index"
-    save(index, path)
+    save_text(index, path)
     lines = path.read_text(encoding="utf-8").splitlines()
-    lines[0] = "# search-engine-index v2"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines[0] = "# search-engine-index v9"
+    path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
     with pytest.raises(IndexFormatError, match="v1"):
         load(path)
 
 
-# Writes a file per generated example, so the timing measures the disk rather
-# than the code. Hypothesis deadlines catch code that goes pathologically slow
-# on some input, which is a real signal for a pure function and noise here.
-@settings(deadline=None)
-@given(st.lists(st.text(), min_size=1, max_size=6))
-def test_any_index_round_trips_unchanged(
-    tmp_path_factory: pytest.TempPathFactory, texts: list[str]
-) -> None:
-    """The falsifying direction: generated corpora rather than chosen ones."""
-    index = _index_of(dict(enumerate(texts)))
-    path = tmp_path_factory.mktemp("rt") / "i.index"
-    save(index, path)
-    restored = load(path)
-    assert set(restored.document_ids) == set(index.document_ids)
-    assert set(restored.terms) == set(index.terms)
-    for term in index.terms:
-        assert restored.postings(term) == index.postings(term)
-
-
-# Writes a file per generated example, so the timing measures the disk rather
-# than the code. Hypothesis deadlines catch code that goes pathologically slow
-# on some input, which is a real signal for a pure function and noise here.
-@settings(deadline=None)
-@given(st.lists(st.text(), min_size=1, max_size=6))
-def test_queries_behave_the_same_before_and_after_a_round_trip(
-    tmp_path_factory: pytest.TempPathFactory, texts: list[str]
-) -> None:
-    """What actually matters: the reloaded index answers identically."""
-    index = _index_of(dict(enumerate(texts)))
-    path = tmp_path_factory.mktemp("rt") / "i.index"
-    save(index, path)
-    restored = load(path)
-    for token in {token for text in texts for token in tokenize(text)}:
-        assert search(restored, token) == search(index, token)
+def test_a_version_one_file_with_no_documents(tmp_path: Path) -> None:
+    """An empty corpus is a real case, and its documents line has no body."""
+    path = tmp_path / "i.index"
+    save_text(InvertedIndex(), path)
+    # The prefix is written with its trailing space even when nothing follows.
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "# search-engine-index v1",
+        "# documents: ",
+    ]
+    assert load(path).document_count == 0

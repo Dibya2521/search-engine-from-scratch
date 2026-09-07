@@ -21,15 +21,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
 from search_engine.index import InvertedIndex
-from search_engine.persistence import load, save
+from search_engine.persistence import load, save, save_text
 
 DOCUMENT_COUNT = 10_000
 TOKENS_PER_DOCUMENT = 100
 VOCABULARY_SIZE = 8_000
 SEED = 20260903
-REPEATS = 5
+REPEATS = 7
 
 STEMS = (
     "connect",
@@ -54,6 +55,9 @@ STEMS = (
     "national",
 )
 SUFFIXES = ("", "s", "ed", "ing", "ion", "ions", "al", "ally", "ive", "ness")
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,24 +104,38 @@ def time_load(path: Path) -> float:
     return time.perf_counter() - start
 
 
-def measure(index: InvertedIndex, directory: Path) -> Measurement:
-    """Time writing and reading the plain-text format."""
-    path = directory / "v1.index"
+def measure(
+    name: str,
+    writer: Callable[[InvertedIndex, Path], None],
+    index: InvertedIndex,
+    path: Path,
+) -> Measurement:
+    """Time writing and reading one format, best of several runs each.
 
-    start = time.perf_counter()
-    save(index, path)
-    save_seconds = time.perf_counter() - start
-
+    Both directions are timed the same way. An earlier version timed the save
+    once and the load best-of-five, and the save figure then swung between
+    plus four and plus sixty-four percent across runs of the same code: it was
+    reporting how busy the machine was, not how fast the format is.
+    """
+    save_seconds = min(_time_save(writer, index, path) for _ in range(REPEATS))
     return Measurement(
-        name="v1 plain text",
+        name=name,
         file_bytes=path.stat().st_size,
         save_seconds=save_seconds,
         load_seconds=min(time_load(path) for _ in range(REPEATS)),
     )
 
 
-def report(index: InvertedIndex, source_bytes: int, result: Measurement) -> None:
-    """Print the observed figures for one format."""
+def _time_save(
+    writer: Callable[[InvertedIndex, Path], None], index: InvertedIndex, path: Path
+) -> float:
+    start = time.perf_counter()
+    writer(index, path)
+    return time.perf_counter() - start
+
+
+def describe(index: InvertedIndex, source_bytes: int) -> tuple[int, int]:
+    """Print what the index holds, and return its posting and occurrence counts."""
     postings = sum(index.document_frequency(term) for term in index.terms)
     occurrences = sum(
         len(entry) for term in index.terms for entry in index.postings(term).values()
@@ -127,18 +145,34 @@ def report(index: InvertedIndex, source_bytes: int, result: Measurement) -> None
     print(f"postings entries   : {postings:,}")
     print(f"stored occurrences : {occurrences:,}")
     print(f"source text        : {source_bytes / 1_000_000:.1f} MB")
+    return postings, occurrences
+
+
+def compare(
+    baseline: Measurement, current: Measurement, source_bytes: int, occurrences: int
+) -> None:
+    """Print both formats side by side, with the change between them."""
+    header = f"{'':<22}{baseline.name:>14}{current.name:>14}{'change':>12}"
     print()
-    print(f"format             : {result.name}")
-    print(f"file size          : {result.file_bytes / 1_000_000:.2f} MB")
-    print(f"file / source      : {result.file_bytes / source_bytes:.2f}x")
-    print(f"bytes per posting  : {result.file_bytes / postings:.1f}")
-    print(f"bytes per occurrence: {result.file_bytes / occurrences:.1f}")
-    print()
-    print(f"save               : {result.save_seconds:7.3f} s")
-    print(f"load, best of {REPEATS}   : {result.load_seconds:7.3f} s")
-    print(
-        f"load throughput    : {result.file_bytes / result.load_seconds / 1e6:.1f} MB/s"
+    print(header)
+    print("-" * len(header))
+    rows = (
+        ("file size, MB", baseline.file_bytes / 1e6, current.file_bytes / 1e6),
+        (
+            "vs source text",
+            baseline.file_bytes / source_bytes,
+            current.file_bytes / source_bytes,
+        ),
+        (
+            "bytes / occurrence",
+            baseline.file_bytes / occurrences,
+            current.file_bytes / occurrences,
+        ),
+        ("save, s", baseline.save_seconds, current.save_seconds),
+        ("load, s", baseline.load_seconds, current.load_seconds),
     )
+    for label, left, right in rows:
+        print(f"{label:<22}{left:>14.3f}{right:>14.3f}{(right - left) / left:>11.1%}")
 
 
 def main() -> None:
@@ -147,8 +181,12 @@ def main() -> None:
     corpus = make_corpus(rng, make_vocabulary(VOCABULARY_SIZE))
     index = build(corpus)
     source_bytes = sum(len(text) for text in corpus)
+    _, occurrences = describe(index, source_bytes)
     with TemporaryDirectory() as directory:
-        report(index, source_bytes, measure(index, Path(directory)))
+        root = Path(directory)
+        baseline = measure("v1 text", save_text, index, root / "v1.index")
+        current = measure("v2 binary", save, index, root / "v2.index")
+    compare(baseline, current, source_bytes, occurrences)
 
 
 if __name__ == "__main__":

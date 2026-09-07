@@ -26,9 +26,10 @@ Complete and working end to end.
 | Phrase queries | done |
 | TF-IDF ranking and cosine similarity | done |
 | BM25 ranking | done |
+| Compressed binary index format | done |
 | Retrieval quality evaluation | done |
 
-450 tests, 100 percent branch coverage, verified on Python 3.12, 3.13 and 3.14.
+500 tests, 100 percent branch coverage, verified on Python 3.12, 3.13 and 3.14.
 
 ## Requirements
 
@@ -193,10 +194,12 @@ alternatives are.
 - [Stopwords](docs/05-stopwords.md)
 - [Ranking with TF-IDF](docs/06-ranking.md)
 - [BM25](docs/09-bm25.md)
+- [Index compression](docs/10-compression.md)
 - [Reading a corpus, and saving the index](docs/07-corpus-and-persistence.md)
 - [Measuring retrieval quality](docs/08-evaluation.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 - [ADR 0002: BM25 alongside TF-IDF](docs/adr/0002-bm25-alongside-tf-idf.md)
+- [ADR 0003: A compressed binary index format](docs/adr/0003-binary-index-format.md)
 
 What changed between versions, and why, is in the
 [changelog](CHANGELOG.md).
@@ -212,6 +215,7 @@ Everything below came from a script in `benchmarks/`, not from an estimate.
 | Index build | 110,396 tokens/s, 1.1 MB/s |
 | Index memory | 131 bytes per posting, 9.4x the source text |
 | Ranking | 1.7 microseconds per candidate |
+| Index file size | 2.72 MB against 6.63 MB, 58.9 percent smaller than the text format |
 
 Two findings worth the space:
 
@@ -219,6 +223,14 @@ Two findings worth the space:
 five cases out of six, because sorting the position sets by size has to build
 every set before it can compare their lengths. Rebuilt to construct them lazily,
 it wins 1.8x on the cases that are actually slow.
+
+**Compressing the index made it 58.9 percent smaller and 23 percent slower to
+load.** The usual justification for compressing an index is that it *saves*
+time, because fewer bytes are read from disk. That argument has a condition
+attached which nobody states: it holds when disk reading dominates, and a 6.6 MB
+file on a warm page cache is never read from disk at all. What remains is the
+decoding, which parsing text does not have to do. A performance claim carries
+the conditions that made it true.
 
 **BM25 did not beat TF-IDF on this project's own test collection.** It wins on
 three of four metrics by about one percent, loses on the fourth, and wins 14

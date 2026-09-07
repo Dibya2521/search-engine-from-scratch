@@ -12,8 +12,9 @@ from __future__ import annotations
 import re
 from typing import Final
 
-# Applied after lowercasing, hence no A-Z in the class.
-_TOKEN_PATTERN: Final = re.compile(r"[a-z0-9]+")
+# Applied after lowercasing, hence no A-Z in the class. Public because the
+# analyzer fingerprint is built from it: changing this changes every term.
+TOKEN_PATTERN: Final = re.compile(r"[a-z0-9]+")
 
 
 def tokenize(text: str) -> list[str]:
@@ -22,4 +23,4 @@ def tokenize(text: str) -> list[str]:
     Lowercasing must come before filtering: some code points lowercase *into*
     ASCII, such as U+212A becoming a plain ``k``.
     """
-    return [match.group() for match in _TOKEN_PATTERN.finditer(text.lower())]
+    return [match.group() for match in TOKEN_PATTERN.finditer(text.lower())]

@@ -22,6 +22,12 @@ from __future__ import annotations
 
 from typing import Final
 
+# Names the variant implemented here, which is the algorithm author's revised
+# rules rather than the 1980 paper. Part of the analyzer fingerprint, so
+# changing the rules invalidates indexes built with the old ones.
+ALGORITHM_VERSION: Final = "porter-revised"
+
+
 _VOWELS: Final = frozenset("aeiou")
 
 # Shortest word worth stemming. Below this the algorithm can consume the word
