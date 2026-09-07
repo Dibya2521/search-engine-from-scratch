@@ -16,6 +16,14 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-09-07
+
+A compressed index format, and two guards against failures that were previously
+silent. The measurement contradicted the textbook justification for the change,
+which is recorded rather than smoothed over.
+
 ### Added
 
 - `benchmarks/index_format.py`, measuring what an index costs on disk and how
@@ -201,6 +209,7 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Dibya2521/search-engine-from-scratch/releases/tag/v0.1.0
