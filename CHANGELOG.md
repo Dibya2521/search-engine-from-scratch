@@ -25,8 +25,33 @@ named, so the claim can be re-checked rather than believed.
   distinguish a straight line from a curve.
 - `docs/11-at-scale.md`, which publishes those measurements against the
   projections that preceded them and says which of the projections survived.
+- `search_engine.segment`, an index written as one immutable file and searched
+  where it lies. A term dictionary front coded in blocks of 16, binary searched
+  through a block index, a fixed-width footer at the end giving every section's
+  offset, postings decoded through `mmap` only when a term is asked for, and
+  skip pointers on any postings list of at least 128 documents.
+- `ReadableIndex`, the protocol both index formats satisfy. Querying and ranking
+  depend on it and nothing more, which is why neither changed when the second
+  format arrived.
+- `InvertedIndex.document_length`, so a scorer with a length prior can ask the
+  index rather than recover lengths by walking every posting.
+- `search-engine index --on-disk`, writing a segment. `search-engine search`
+  reads either format, deciding from the file's first bytes.
+- `benchmarks/on_disk.py`, comparing the two formats and isolating what skip
+  pointers are worth.
+- `docs/12-on-disk-index.md` and ADR 0004, recording the format and the
+  alternatives rejected.
+
+### Changed
+
+- **`BM25Ranker` asks the index for document lengths** instead of computing them
+  from the postings. Against a mapped index the old path read the entire file on
+  the first query, which would have undone the reason for mapping it.
 
 ### Measured
+
+Reproduce the first group with `uv run python benchmarks/at_scale.py` and the
+second with `uv run python benchmarks/on_disk.py`.
 
 - **Build time is linear and the recorded throughput holds.** 0.8 to 0.9 seconds
   per source megabyte at every size, and 1.14, 1.18 and 1.16 MB/s at the three
@@ -47,12 +72,28 @@ named, so the claim can be re-checked rather than believed.
 - **The synthetic corpus cannot answer any question about vocabulary growth.**
   Fitting Heaps' law over the six sizes gives an exponent of 0.257 against a
   published English range of 0.4 to 0.6, with fit errors swinging from +20 to
-  -15 percent. The generator draws from 100,000 distinct words and the corpus has
-  found 99,992 of them by 20,000 documents, so vocabulary flattens because there
-  is nothing left to discover. Every measurement here that does not depend on
-  vocabulary stands; anything that does needs real text.
-
-Reproduce all of the above with `uv run python benchmarks/at_scale.py`.
+  -15 percent. The generator draws from 100,000 distinct words and the corpus
+  has found 99,992 of them by 20,000 documents, so vocabulary flattens because
+  there is nothing left to discover. Every measurement here that does not depend
+  on vocabulary stands; anything that does needs real text.
+- **Opening a segment is 156x faster and holds 189x less memory** than loading
+  the equivalent index: 0.0084 s and 1.1 MB against 1.3087 s and 207.4 MB, over
+  10,000 documents.
+- **Reading a term is about 1.4 ms slower**, because a binary search and a
+  decode cannot beat a lookup in a dict that is already in memory. The two cross
+  at roughly 950 distinct terms read from one open index. **This format is not
+  faster; it makes the cost proportional to the question rather than to the
+  index**, which is what allows an index larger than memory to be searched.
+- **Skip pointers are worth 93.2 percent** on a 10,000 document postings list
+  and 81.0 percent on one of 1,273, measured against walking the identifiers
+  without them. On a list of 26, below the threshold at which one is written,
+  they cost 4.9 percent. Most of the gain in finding a document comes from not
+  decoding positions at all, which is 22x on the longest list and happens with
+  or without a skip list; the figures above are what skipping adds on top.
+- **Skip lists cost 2.6 percent of the file**, 2.72 MB to 2.79 MB.
+- **Verifying the checksum costs 2.8 ms for 2.79 MB**, about 970 MB/s, which is
+  0.2 percent of what loading the same index costs. It stays on by default,
+  because a silently corrupt index returns wrong answers indefinitely.
 
 ## [0.3.0] - 2026-09-07
 

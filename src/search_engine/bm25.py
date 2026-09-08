@@ -34,7 +34,7 @@ from search_engine.ranking import BaseRanker
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from search_engine.index import InvertedIndex
+    from search_engine.index import ReadableIndex
 
 # Conventional defaults from the literature. k1 is usually quoted as a range of
 # 1.2 to 2.0 and b as 0.75; these are the values most implementations ship.
@@ -42,7 +42,7 @@ K1: Final = 1.2
 B: Final = 0.75
 
 
-def bm25_inverse_document_frequency(index: InvertedIndex, term: str) -> float:
+def bm25_inverse_document_frequency(index: ReadableIndex, term: str) -> float:
     """Return the BM25 inverse document frequency of a term.
 
     ``log(1 + (N - df + 0.5) / (df + 0.5))``. The original formulation omits
@@ -73,7 +73,7 @@ class BM25Ranker(BaseRanker):
         b: Length correction, from 0.0 for none to 1.0 for full.
     """
 
-    def __init__(self, index: InvertedIndex, k1: float = K1, b: float = B) -> None:
+    def __init__(self, index: ReadableIndex, k1: float = K1, b: float = B) -> None:
         super().__init__(index)
         self._k1 = k1
         self._b = b
@@ -86,17 +86,16 @@ class BM25Ranker(BaseRanker):
         self._average_length = self._mean_length()
 
     def _document_lengths(self) -> dict[int, int]:
-        """Return each document's length in terms, computed in one pass.
+        """Return each document's length in terms, asked of the index.
 
-        Length is measured after analysis, so removed stopwords do not count.
-        This is the right measure here because it is the number of terms the
-        document actually contributes to the index.
+        An index read from a file has these stored and answers each in one
+        lookup. Recovering them here by walking every posting instead would
+        read the whole file on the first query.
         """
-        lengths: dict[int, int] = {}
-        for term in self._index.terms:
-            for document_id, positions in self._index.postings(term).items():
-                lengths[document_id] = lengths.get(document_id, 0) + len(positions)
-        return lengths
+        return {
+            document_id: self._index.document_length(document_id)
+            for document_id in self._index.document_ids
+        }
 
     def _mean_length(self) -> float:
         """Return the mean document length, or 0.0 for an empty corpus.

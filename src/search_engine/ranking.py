@@ -36,10 +36,10 @@ from search_engine.analysis import analyze
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
-    from search_engine.index import InvertedIndex
+    from search_engine.index import ReadableIndex
 
 
-def inverse_document_frequency(index: InvertedIndex, term: str) -> float:
+def inverse_document_frequency(index: ReadableIndex, term: str) -> float:
     """Return ``log(N / df)`` for a term.
 
     The result is zero for a term present in every document and grows as the
@@ -100,7 +100,7 @@ class BaseRanker:
     snapshots depend on the whole corpus and change when a document is added.
     """
 
-    def __init__(self, index: InvertedIndex) -> None:
+    def __init__(self, index: ReadableIndex) -> None:
         self._index = index
         self._built_for = index.document_count
         self._idf = {
@@ -148,7 +148,7 @@ class BaseRanker:
 class Ranker(BaseRanker):
     """Scores documents by TF-IDF cosine similarity."""
 
-    def __init__(self, index: InvertedIndex) -> None:
+    def __init__(self, index: ReadableIndex) -> None:
         super().__init__(index)
         self._norms = self._document_norms()
 

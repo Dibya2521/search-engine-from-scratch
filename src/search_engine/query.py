@@ -24,7 +24,7 @@ from search_engine.analysis import analyze_positioned
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from search_engine.index import InvertedIndex
+    from search_engine.index import ReadableIndex
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +60,7 @@ def parse(text: str) -> Query:
     )
 
 
-def _matching_any_term(index: InvertedIndex, terms: Sequence[str]) -> set[int]:
+def _matching_any_term(index: ReadableIndex, terms: Sequence[str]) -> set[int]:
     """Union the postings, which is what a one-word or free-text query wants."""
     matches: set[int] = set()
     for term in terms:
@@ -97,7 +97,7 @@ def _contains_phrase(
 
 
 def _matching_phrase(
-    index: InvertedIndex, terms: Sequence[str], offsets: Sequence[int]
+    index: ReadableIndex, terms: Sequence[str], offsets: Sequence[int]
 ) -> set[int]:
     """Find documents holding every term at the spacing the query asked for."""
     if not terms:
@@ -122,13 +122,13 @@ def _matching_phrase(
     }
 
 
-def execute(index: InvertedIndex, query: Query) -> set[int]:
+def execute(index: ReadableIndex, query: Query) -> set[int]:
     """Run a parsed query and return the identifiers of matching documents."""
     if query.is_phrase:
         return _matching_phrase(index, query.terms, query.offsets)
     return _matching_any_term(index, query.terms)
 
 
-def search(index: InvertedIndex, text: str) -> set[int]:
+def search(index: ReadableIndex, text: str) -> set[int]:
     """Parse and run query text in one step."""
     return execute(index, parse(text))

@@ -14,8 +14,10 @@ from search_engine.cli import (
     EXIT_NO_RESULTS,
     EXIT_OK,
     build_parser,
+    is_segment,
     main,
 )
+from search_engine.segment import SEGMENT_HEADER
 from tests.conftest import SAMPLE_CORPUS as FIXTURE
 
 if TYPE_CHECKING:
@@ -241,3 +243,53 @@ def test_an_unknown_scorer_is_rejected(built_index: Path) -> None:
     with pytest.raises(SystemExit) as exit_info:
         main(["search", str(built_index), "computer", "--scorer", "nonsense"])
     assert exit_info.value.code == 2
+
+
+def test_indexing_on_disk_writes_a_segment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "on-disk.seg"
+    assert main(["index", str(FIXTURE), str(output), "--on-disk"]) == EXIT_OK
+    assert "indexed" in capsys.readouterr().out
+    assert is_segment(output)
+
+
+def test_indexing_without_the_flag_writes_the_whole_file_format(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "whole.index"
+    assert main(["index", str(FIXTURE), str(output)]) == EXIT_OK
+    capsys.readouterr()
+    assert not is_segment(output)
+
+
+@pytest.mark.parametrize("extra", [["--on-disk"], []], ids=["segment", "whole"])
+@pytest.mark.parametrize("scorer", ["tfidf", "bm25"])
+def test_both_formats_answer_the_same_query_the_same_way(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    extra: list[str],
+    scorer: str,
+) -> None:
+    """The point of the protocol: ranking does not know which format it has."""
+    output = tmp_path / "index"
+    assert main(["index", str(FIXTURE), str(output), *extra]) == EXIT_OK
+    capsys.readouterr()
+
+    assert main(["search", str(output), "web search", "--scorer", scorer]) == EXIT_OK
+    assert "document" in capsys.readouterr().out
+
+
+def test_a_corrupt_segment_reports_the_problem(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "broken.seg"
+    assert main(["index", str(FIXTURE), str(output), "--on-disk"]) == EXIT_OK
+    capsys.readouterr()
+    data = bytearray(output.read_bytes())
+    data[len(SEGMENT_HEADER) + 20] ^= 0xFF
+    output.write_bytes(bytes(data))
+
+    assert main(["search", str(output), "web"]) == EXIT_BAD_INPUT
+    assert "error:" in capsys.readouterr().err
+    output.unlink()

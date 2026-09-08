@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from search_engine.index import InvertedIndex
+    from search_engine.index import ReadableIndex
 
 # The 25 term list from Manning, Raghavan and Schutze, "Introduction to
 # Information Retrieval", table 2.2. Chosen because it is published and small:
@@ -56,7 +56,7 @@ DEFAULT_STOPWORDS: Final = frozenset(
 )
 
 
-def derive(index: InvertedIndex, threshold: float = 0.5) -> frozenset[str]:
+def derive(index: ReadableIndex, threshold: float = 0.5) -> frozenset[str]:
     """Return terms appearing in at least `threshold` of the indexed documents.
 
     Returns stems, not surface words, because that is what an index stores.

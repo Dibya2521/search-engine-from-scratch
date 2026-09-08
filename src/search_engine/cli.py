@@ -11,19 +11,26 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from search_engine import __version__
 from search_engine.bm25 import BM25Ranker
 from search_engine.corpus import CorpusFormatError, read
-from search_engine.index import InvertedIndex
+from search_engine.index import InvertedIndex, ReadableIndex
 from search_engine.persistence import IndexFormatError, load, save
 from search_engine.query import search
 from search_engine.ranking import BaseRanker, Ranker
+from search_engine.segment import (
+    SEGMENT_HEADER,
+    SegmentFormatError,
+    SegmentReader,
+    write_segment,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Generator, Sequence
 
 EXIT_OK = 0
 EXIT_NO_RESULTS = 1
@@ -32,7 +39,7 @@ EXIT_BAD_INPUT = 2
 # TF-IDF remains the default because the comparison between the two did not
 # find a difference distinguishable from chance on the collection available.
 # See docs/09-bm25.md.
-SCORERS: Final[dict[str, Callable[[InvertedIndex], BaseRanker]]] = {
+SCORERS: Final[dict[str, Callable[[ReadableIndex], BaseRanker]]] = {
     "tfidf": Ranker,
     "bm25": BM25Ranker,
 }
@@ -51,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     build = subcommands.add_parser("index", help="build an index from a corpus")
     build.add_argument("corpus", type=Path, help="corpus file of <page> records")
     build.add_argument("output", type=Path, help="index file to write")
+    build.add_argument(
+        "--on-disk",
+        action="store_true",
+        help="write a segment that is searched in place rather than loaded",
+    )
 
     find = subcommands.add_parser("search", help="query an index")
     find.add_argument("index", type=Path, help="index file to read")
@@ -66,8 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_index(corpus: Path, output: Path) -> int:
-    """Index every document in a corpus file and write the result."""
+def build_index(corpus: Path, output: Path, *, on_disk: bool = False) -> int:
+    """Index every document in a corpus file and write the result.
+
+    The two formats differ in how they are read rather than in what they hold:
+    one is decoded whole when it is opened, the other is mapped and decoded a
+    term at a time. See docs/12-on-disk-index.md for which to prefer.
+    """
     index = InvertedIndex()
     try:
         for document in read(corpus):
@@ -75,7 +92,10 @@ def build_index(corpus: Path, output: Path) -> int:
     except (OSError, CorpusFormatError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_BAD_INPUT
-    save(index, output)
+    if on_disk:
+        write_segment(index, output)
+    else:
+        save(index, output)
     print(
         f"indexed {index.document_count} documents, "
         f"{index.vocabulary_size} distinct terms -> {output}"
@@ -83,13 +103,41 @@ def build_index(corpus: Path, output: Path) -> int:
     return EXIT_OK
 
 
+def is_segment(path: Path) -> bool:
+    """Return whether a file is a segment, from its first bytes alone.
+
+    Reads the header rather than the file, so deciding the format costs
+    nothing on an index that is not going to be loaded.
+    """
+    with path.open("rb") as handle:
+        return handle.read(len(SEGMENT_HEADER)) == SEGMENT_HEADER
+
+
+@contextmanager
+def open_index(path: Path) -> Generator[ReadableIndex]:
+    """Open an index in whichever format it was written in.
+
+    A segment holds the file mapped for as long as it is read, which is why
+    this is a context manager and not a function returning an index.
+    """
+    if is_segment(path):
+        with SegmentReader(path) as reader:
+            yield reader
+    else:
+        yield load(path)
+
+
 def run_query(index_path: Path, query: str, limit: int, scorer: str) -> int:
-    """Search an index and print ranked results."""
+    """Search an index in either format and print ranked results."""
     try:
-        index = load(index_path)
-    except (OSError, IndexFormatError) as error:
+        with open_index(index_path) as index:
+            return _ranked(index, query, limit, scorer)
+    except (OSError, IndexFormatError, SegmentFormatError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_BAD_INPUT
+
+
+def _ranked(index: ReadableIndex, query: str, limit: int, scorer: str) -> int:
     candidates = search(index, query)
     if not candidates:
         print("no matching documents")
@@ -111,7 +159,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command == "index":
-        return build_index(arguments.corpus, arguments.output)
+        return build_index(
+            arguments.corpus, arguments.output, on_disk=arguments.on_disk
+        )
     if arguments.command == "search":
         return run_query(
             arguments.index, arguments.query, arguments.limit, arguments.scorer
