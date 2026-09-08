@@ -18,6 +18,7 @@ real text needs real text, which `scripts/make_corpus.py` produces from a dump.
 
 from __future__ import annotations
 
+import itertools
 import random
 from typing import TYPE_CHECKING
 
@@ -70,6 +71,17 @@ def zipf_weights(size: int) -> list[float]:
     return [1.0 / (rank + 1) for rank in range(size)]
 
 
+def cumulative_weights(size: int) -> list[float]:
+    """Return the running totals of the Zipf weights.
+
+    Given ``weights``, ``random.choices`` accumulates them again on every call,
+    which costs one pass over the vocabulary per document. Passing the running
+    totals as ``cum_weights`` enters the same branch of the standard library
+    with the work already done, and draws are identical for a given seed.
+    """
+    return list(itertools.accumulate(zipf_weights(size)))
+
+
 def fixed_length_corpus(
     documents: int, tokens: int, vocabulary: list[str], seed: int = SEED
 ) -> list[str]:
@@ -79,9 +91,9 @@ def fixed_length_corpus(
     and changing the generator would make those numbers incomparable.
     """
     rng = random.Random(seed)
-    weights = zipf_weights(len(vocabulary))
+    cumulative = cumulative_weights(len(vocabulary))
     return [
-        " ".join(rng.choices(vocabulary, weights=weights, k=tokens))
+        " ".join(rng.choices(vocabulary, cum_weights=cumulative, k=tokens))
         for _ in range(documents)
     ]
 
@@ -96,9 +108,9 @@ def varied_length_corpus(
     Yielded one at a time so a corpus larger than memory can be written.
     """
     rng = random.Random(seed)
-    weights = zipf_weights(len(vocabulary))
+    cumulative = cumulative_weights(len(vocabulary))
     for _ in range(documents):
         # Uniform in the exponent gives a length distribution that is uniform
         # per order of magnitude rather than per token.
         length = int(SHORTEST * (LONGEST / SHORTEST) ** rng.random())
-        yield " ".join(rng.choices(vocabulary, weights=weights, k=length))
+        yield " ".join(rng.choices(vocabulary, cum_weights=cumulative, k=length))
