@@ -15,12 +15,14 @@ from search_engine.codecs import encode_number
 from search_engine.index import InvertedIndex
 from search_engine.segment import (
     FOOTER_SIZE,
+    POSTINGS_CACHE_SIZE,
     SEGMENT_HEADER,
     TERMS_PER_BLOCK,
     Footer,
     SegmentAnalyzerMismatchError,
     SegmentCorruptError,
     SegmentFormatError,
+    SegmentReader,
     TermDictionary,
     TermEntry,
     decode_documents,
@@ -313,3 +315,140 @@ def _footer_of(data: bytes) -> Footer:
 def _with_checksum(data: bytearray) -> bytes:
     body = bytes(data[:-4])
     return body + zlib.crc32(body).to_bytes(4, "big")
+
+
+def write(index: InvertedIndex, path: Path) -> Path:
+    write_segment(index, path)
+    return path
+
+
+def test_a_reader_answers_the_same_as_the_index_it_came_from(tmp_path: Path) -> None:
+    index = index_of(
+        "the quick brown fox jumps over the lazy dog",
+        "quick brown foxes are quick and brown",
+        "a lazy dog sleeps all day",
+    )
+    with SegmentReader(write(index, tmp_path / "a.seg")) as reader:
+        assert reader.document_count == index.document_count
+        assert reader.vocabulary_size == index.vocabulary_size
+        assert list(reader.terms) == sorted(index.terms)
+        assert list(reader.document_ids) == sorted(index.document_ids)
+        for term in index.terms:
+            assert term in reader
+            assert reader.document_frequency(term) == index.document_frequency(term)
+            assert reader.postings(term) == {
+                document_id: list(positions)
+                for document_id, positions in index.postings(term).items()
+            }
+
+
+def test_an_absent_term_reads_as_empty(tmp_path: Path) -> None:
+    with SegmentReader(write(index_of("alpha beta"), tmp_path / "a.seg")) as reader:
+        assert "gamma" not in reader
+        assert reader.postings("gamma") == {}
+        assert reader.document_frequency("gamma") == 0
+        assert reader.max_term_frequency("gamma") == 0
+
+
+def test_postings_are_cached_after_the_first_read(tmp_path: Path) -> None:
+    with SegmentReader(write(index_of("alpha beta"), tmp_path / "a.seg")) as reader:
+        assert reader.postings("alpha") is reader.postings("alpha")
+
+
+def test_the_cache_is_bounded(tmp_path: Path) -> None:
+    terms = [f"t{number:05d}" for number in range(POSTINGS_CACHE_SIZE + 10)]
+    with SegmentReader(write(index_of_terms(terms), tmp_path / "a.seg")) as reader:
+        for term in terms:
+            assert reader.postings(term)
+        assert len(reader.postings(terms[-1])) == 1
+
+
+def test_document_lengths_and_frequencies_come_from_the_dictionary(
+    tmp_path: Path,
+) -> None:
+    index = index_of("alpha alpha alpha beta", "alpha beta beta gamma")
+    with SegmentReader(write(index, tmp_path / "a.seg")) as reader:
+        assert reader.document_length(0) == 4
+        assert reader.document_length(1) == 4
+        assert reader.document_length(99) == 0
+        assert reader.max_term_frequency("alpha") == 3
+
+
+def test_closing_twice_is_safe(tmp_path: Path) -> None:
+    reader = SegmentReader(write(index_of("alpha"), tmp_path / "a.seg"))
+    reader.close()
+    reader.close()
+
+
+def test_a_closed_reader_refuses_to_read(tmp_path: Path) -> None:
+    reader = SegmentReader(write(index_of("alpha beta"), tmp_path / "a.seg"))
+    reader.close()
+    with pytest.raises(ValueError, match="released"):
+        reader.postings("alpha")
+
+
+def test_a_corrupt_file_is_refused_and_left_unmapped(tmp_path: Path) -> None:
+    """Windows cannot delete a mapped file, so deleting it proves it was closed."""
+    path = tmp_path / "a.seg"
+    data = bytearray(encode_segment(index_of("alpha beta gamma")))
+    data[len(SEGMENT_HEADER) + 20] ^= 0xFF
+    path.write_bytes(bytes(data))
+    with pytest.raises(SegmentCorruptError):
+        SegmentReader(path)
+    path.unlink()
+
+
+def test_an_empty_file_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "a.seg"
+    path.write_bytes(b"")
+    with pytest.raises(SegmentFormatError, match="empty"):
+        SegmentReader(path)
+    path.unlink()
+
+
+def test_a_corrupt_file_opens_unverified_and_verify_still_catches_it(
+    tmp_path: Path,
+) -> None:
+    """Skipping the checksum is what makes opening cheap, and what it costs."""
+    path = tmp_path / "a.seg"
+    data = bytearray(encode_segment(index_of("alpha beta gamma")))
+    data[len(SEGMENT_HEADER) + 20] ^= 0xFF
+    path.write_bytes(bytes(data))
+    with SegmentReader(path, verify=False) as reader:
+        assert reader.document_count == 1
+        with pytest.raises(SegmentCorruptError):
+            reader.verify()
+
+
+def test_a_term_whose_postings_span_many_pages(tmp_path: Path) -> None:
+    """Offsets have to survive a term far larger than one memory page."""
+    postings = {"common": {number: [0, 5] for number in range(20_000)}}
+    index = InvertedIndex.from_postings(list(range(20_000)), postings)
+    with SegmentReader(write(index, tmp_path / "big.seg")) as reader:
+        decoded = reader.postings("common")
+        assert len(decoded) == 20_000
+        assert decoded[19_999] == [0, 5]
+
+
+@settings(deadline=None, max_examples=25)
+@given(
+    st.lists(
+        st.text(alphabet="abcde", min_size=1, max_size=4),
+        min_size=1,
+        max_size=25,
+        unique=True,
+    )
+)
+def test_a_reader_matches_the_index_for_any_vocabulary(
+    tmp_path_factory: pytest.TempPathFactory, terms: list[str]
+) -> None:
+    """Writes a file per example, so the deadline measures the disk not the code."""
+    index = index_of_terms(terms)
+    path = tmp_path_factory.mktemp("seg") / "a.seg"
+    with SegmentReader(write(index, path)) as reader:
+        for term in index.terms:
+            assert reader.postings(term) == {
+                document_id: list(positions)
+                for document_id, positions in index.postings(term).items()
+            }
+        assert reader.postings("zzzzz") == {}

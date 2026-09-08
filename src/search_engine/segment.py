@@ -39,12 +39,14 @@ reading its postings at all.
 
 from __future__ import annotations
 
+import mmap
 import zlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Self
 
 from search_engine.analysis import fingerprint
 from search_engine.codecs import (
+    Bytelike,
     CodecError,
     decode_at,
     decode_sorted_at,
@@ -53,7 +55,7 @@ from search_engine.codecs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Iterable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from search_engine.index import InvertedIndex
@@ -61,6 +63,10 @@ if TYPE_CHECKING:
 SEGMENT_HEADER: Final = b"search-engine-segment v1\n"
 
 TERMS_PER_BLOCK: Final = 16
+
+# Bounded so a long-running reader cannot grow without limit. Superseded by a
+# real cache, keyed by segment so it cannot go stale, in a later release.
+POSTINGS_CACHE_SIZE: Final = 1024
 
 _FOOTER_FIELDS: Final = 8
 _FIELD_BYTES: Final = 8
@@ -187,7 +193,7 @@ def _encode_term_postings(postings: Mapping[int, Sequence[int]]) -> bytes:
     return b"".join(parts)
 
 
-def decode_term_postings(data: bytes, entry: TermEntry) -> dict[int, list[int]]:
+def decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
     """Decode one term's postings from the bytes its entry points at.
 
     Reads only the entry's own range, which is the property the whole format
@@ -203,7 +209,7 @@ def decode_term_postings(data: bytes, entry: TermEntry) -> dict[int, list[int]]:
         raise SegmentFormatError(message) from error
 
 
-def _decode_term_postings(data: bytes, entry: TermEntry) -> dict[int, list[int]]:
+def _decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
     cursor = entry.offset
     count, cursor = decode_at(data, cursor)
     document_ids, cursor = decode_sorted_at(data, cursor, count)
@@ -215,7 +221,7 @@ def _decode_term_postings(data: bytes, entry: TermEntry) -> dict[int, list[int]]
     return postings
 
 
-def decode_documents(data: bytes, footer: Footer) -> tuple[list[int], list[int]]:
+def decode_documents(data: Bytelike, footer: Footer) -> tuple[list[int], list[int]]:
     """Return the document identifiers and their lengths in tokens, in step.
 
     Raises:
@@ -333,8 +339,14 @@ def _encode_footer(footer: Footer) -> bytes:
     return b"".join(value.to_bytes(_FIELD_BYTES, "big") for value in fields)
 
 
-def read_footer(data: bytes) -> Footer:
+def read_footer(data: Bytelike, *, verify: bool = True) -> Footer:
     """Read the footer of a segment file, after checking the file is one.
+
+    Verifying the checksum reads every byte of the file, which for a
+    memory-mapped segment means faulting in every page it was opened to avoid
+    touching. Pass ``verify=False`` to skip it and check integrity separately,
+    accepting that a corrupt file is then found when a query stumbles into the
+    damage rather than when the file is opened.
 
     Raises:
         SegmentFormatError: If the file is too short, or does not start with the
@@ -343,17 +355,15 @@ def read_footer(data: bytes) -> Footer:
         SegmentAnalyzerMismatchError: If a different analysis configuration
             produced the file.
     """
-    if not data.startswith(SEGMENT_HEADER):
+    if data[: len(SEGMENT_HEADER)] != SEGMENT_HEADER:
         message = "not a segment file: the header is missing"
         raise SegmentFormatError(message)
     if len(data) < len(SEGMENT_HEADER) + FOOTER_SIZE:
         message = "segment file ends before its footer"
         raise SegmentFormatError(message)
 
-    stored_checksum = int.from_bytes(data[-_CHECKSUM_BYTES:], "big")
-    if zlib.crc32(data[:-_CHECKSUM_BYTES]) != stored_checksum:
-        message = "segment file is corrupt: the checksum does not match its contents"
-        raise SegmentCorruptError(message)
+    if verify:
+        verify_checksum(data)
 
     _check_fingerprint(data)
     start = len(data) - FOOTER_SIZE
@@ -366,7 +376,22 @@ def read_footer(data: bytes) -> Footer:
     return Footer(*fields)
 
 
-def _check_fingerprint(data: bytes) -> None:
+def verify_checksum(data: Bytelike) -> None:
+    """Check a segment against its stored checksum.
+
+    Reads the whole file, so it is a deliberate act rather than something a
+    reader does on every open.
+
+    Raises:
+        SegmentCorruptError: If the checksum does not match the contents.
+    """
+    stored = int.from_bytes(data[-_CHECKSUM_BYTES:], "big")
+    if zlib.crc32(data[:-_CHECKSUM_BYTES]) != stored:
+        message = "segment file is corrupt: the checksum does not match its contents"
+        raise SegmentCorruptError(message)
+
+
+def _check_fingerprint(data: Bytelike) -> None:
     try:
         length, cursor = decode_at(data, len(SEGMENT_HEADER))
     except CodecError as error:
@@ -387,7 +412,7 @@ class TermDictionary:
     lands in them.
     """
 
-    def __init__(self, data: bytes, footer: Footer) -> None:
+    def __init__(self, data: Bytelike, footer: Footer) -> None:
         """Take the whole segment and the footer that says where things are."""
         self._data = data
         self._footer = footer
@@ -396,7 +421,7 @@ class TermDictionary:
         )
 
     @classmethod
-    def read(cls, data: bytes) -> TermDictionary:
+    def read(cls, data: Bytelike) -> TermDictionary:
         """Open the dictionary of a segment file.
 
         Raises:
@@ -454,7 +479,7 @@ class TermDictionary:
 
 
 def _decode_entry(
-    data: bytes, cursor: int, previous_term: bytes, previous_offset: int
+    data: Bytelike, cursor: int, previous_term: bytes, previous_offset: int
 ) -> tuple[bytes, TermEntry, int]:
     """Decode one front-coded entry, given the term and offset before it."""
     shared, cursor = decode_at(data, cursor)
@@ -470,7 +495,7 @@ def _decode_entry(
 
 
 def _decode_entries(
-    data: bytes, cursor: int, end: int
+    data: Bytelike, cursor: int, end: int
 ) -> list[tuple[bytes, TermEntry]]:
     entries: list[tuple[bytes, TermEntry]] = []
     term = b""
@@ -483,7 +508,7 @@ def _decode_entries(
 
 
 def _decode_block_index(
-    data: bytes, offset: int, length: int
+    data: Bytelike, offset: int, length: int
 ) -> list[tuple[bytes, int]]:
     cursor = offset
     end = offset + length
@@ -503,3 +528,130 @@ def _decode_block_index(
         message = "segment block index runs past its own length"
         raise SegmentFormatError(message)
     return starts
+
+
+class SegmentReader:
+    """Reads postings out of a segment file without loading it.
+
+    The block index and the document identifiers are read when the segment is
+    opened, because every query needs them and both are small: the block index
+    holds one entry per TERMS_PER_BLOCK terms. Postings are decoded on demand,
+    so a query faults in only the pages holding the terms it actually asked
+    about.
+
+    Verifying the checksum reads every page of the file and so undoes that, and
+    it is the only way to know the file is intact before trusting an answer.
+    The choice is left to the caller and its cost is recorded in the
+    documentation rather than assumed either way.
+
+    The file stays open for the life of the mapping. Closing it first works on
+    Unix and fails on Windows, and a mapped file cannot be replaced or deleted
+    on Windows at all, so a reader that outlives its usefulness blocks the next
+    write.
+    """
+
+    def __init__(self, path: Path, *, verify: bool = True) -> None:
+        """Open and map a segment file.
+
+        Raises:
+            SegmentFormatError: If the file is not a well-formed segment.
+        """
+        self._file = path.open("rb")
+        try:
+            self._map = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+        except ValueError:
+            self._file.close()
+            message = f"segment file is empty: {path}"
+            raise SegmentFormatError(message) from None
+        self._view = memoryview(self._map)
+        try:
+            self._footer = read_footer(self._view, verify=verify)
+            self._dictionary = TermDictionary(self._view, self._footer)
+            ids, lengths = decode_documents(self._view, self._footer)
+        except SegmentFormatError:
+            self.close()
+            raise
+        self._document_ids = ids
+        self._lengths = dict(zip(ids, lengths, strict=True))
+        self._cache: dict[str, dict[int, list[int]]] = {}
+
+    def close(self) -> None:
+        """Release the mapping and the file. Safe to call more than once."""
+        if self._map.closed:
+            return
+        self._view.release()
+        self._map.close()
+        self._file.close()
+
+    def __enter__(self) -> Self:
+        """Return the reader, so it can be used as a context manager."""
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Close the reader when the block ends."""
+        self.close()
+
+    def verify(self) -> None:
+        """Check the whole file against its checksum.
+
+        Raises:
+            SegmentCorruptError: If the checksum does not match the contents.
+        """
+        verify_checksum(self._view)
+
+    def postings(self, term: str) -> Mapping[int, Sequence[int]]:
+        """Return the documents containing a term, and where in each it occurs."""
+        cached = self._cache.get(term)
+        if cached is not None:
+            return cached
+        entry = self._dictionary.lookup(term)
+        if entry is None:
+            return {}
+        decoded = decode_term_postings(self._view, entry)
+        if len(self._cache) >= POSTINGS_CACHE_SIZE:
+            # Replaced by the real cache, keyed by segment, in a later release.
+            self._cache.clear()
+        self._cache[term] = decoded
+        return decoded
+
+    def document_frequency(self, term: str) -> int:
+        """Return how many documents contain a term."""
+        entry = self._dictionary.lookup(term)
+        return 0 if entry is None else entry.document_frequency
+
+    def max_term_frequency(self, term: str) -> int:
+        """Return the term's highest frequency in any one document.
+
+        Read from the dictionary, so it costs no postings read. It bounds what
+        the term can contribute to a document's score.
+        """
+        entry = self._dictionary.lookup(term)
+        return 0 if entry is None else entry.max_term_frequency
+
+    def document_length(self, document_id: int) -> int:
+        """Return a document's length in analysed tokens."""
+        return self._lengths.get(document_id, 0)
+
+    def __contains__(self, term: str) -> bool:
+        """Return whether a term is in the vocabulary."""
+        return self._dictionary.lookup(term) is not None
+
+    @property
+    def document_count(self) -> int:
+        """Return how many documents the segment holds."""
+        return self._footer.document_count
+
+    @property
+    def vocabulary_size(self) -> int:
+        """Return how many distinct terms the segment holds."""
+        return self._footer.vocabulary_size
+
+    @property
+    def terms(self) -> Iterable[str]:
+        """Yield every term, in sorted order."""
+        return self._dictionary.terms()
+
+    @property
+    def document_ids(self) -> Iterable[int]:
+        """Return every document identifier, in ascending order."""
+        return tuple(self._document_ids)

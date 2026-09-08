@@ -36,6 +36,10 @@ _PAYLOAD_BITS: Final = 7
 _PAYLOAD_MASK: Final = 0x7F
 _TERMINATOR: Final = 0x80
 
+# A memory-mapped segment is read through a memoryview so that slicing it copies
+# nothing, and the decoders have to accept that as readily as bytes.
+type Bytelike = bytes | memoryview
+
 
 class CodecError(ValueError):
     """Raised when encoded bytes cannot be decoded.
@@ -82,7 +86,7 @@ def decode(data: bytes) -> list[int]:
     return list(iter_decode(data))
 
 
-def decode_at(data: bytes, offset: int) -> tuple[int, int]:
+def decode_at(data: Bytelike, offset: int) -> tuple[int, int]:
     """Return the number starting at an offset, and the offset just after it.
 
     The entry point for a reader walking a structure of mixed numbers and
@@ -103,7 +107,7 @@ def decode_at(data: bytes, offset: int) -> tuple[int, int]:
     raise CodecError(message)
 
 
-def decode_sorted_at(data: bytes, offset: int, count: int) -> tuple[list[int], int]:
+def decode_sorted_at(data: Bytelike, offset: int, count: int) -> tuple[list[int], int]:
     """Return `count` ascending values from an offset, and the offset after them.
 
     Decodes gaps and accumulates them in one pass. The loop is written out
