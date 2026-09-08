@@ -16,6 +16,15 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-09-08
+
+The engine is measured at scale instead of extrapolated, and the index stops
+having to be loaded before it can be read. Two of the projections this project
+had been carrying were confirmed within 5 percent, one was corrected, and one
+was found to be unanswerable from synthetic data at all.
+
 ### Added
 
 - `benchmarks/at_scale.py`, which builds indexes at six corpus sizes from 500 to
@@ -286,7 +295,8 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Dibya2521/search-engine-from-scratch/releases/tag/v0.1.0
