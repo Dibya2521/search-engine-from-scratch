@@ -16,7 +16,43 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `benchmarks/at_scale.py`, which builds indexes at six corpus sizes from 500 to
+  20,000 documents and records build time, memory, vocabulary, index size and
+  load time at each. Written because every scale claim in this project had been
+  extrapolated from a single 10,000 document run, and one point cannot
+  distinguish a straight line from a curve.
+- `docs/11-at-scale.md`, which publishes those measurements against the
+  projections that preceded them and says which of the projections survived.
+
+### Measured
+
+- **Build time is linear and the recorded throughput holds.** 0.8 to 0.9 seconds
+  per source megabyte at every size, and 1.14, 1.18 and 1.16 MB/s at the three
+  sizes whose timings are reliable. The 1.1 MB/s this project has carried since
+  its first benchmark was measured once on a tenth of the corpus, and it lands
+  inside that range.
+- **Memory is not a fixed multiple of the source text.** The peak-memory to
+  source ratio falls from 14.0x at 500 documents to 9.9x at 20,000 and is still
+  falling, because the fixed cost of a term amortises over a longer postings
+  list. The 9.4x figure previously used as a constant is closer to the limit the
+  ratio approaches than to its value at any measured size.
+- **The projection for a 100 MB corpus was right within 5 percent.** It predicted
+  90 seconds of build time and 940 MB of memory; the measurement at 91.6 MB
+  scales to 86 seconds and 986 MB.
+- **Load time is 0.63 to 0.73 seconds per index megabyte**, a read throughput of
+  about 1.4 MB/s, which grows in step with the file and was absent from the
+  earlier list of what fails first.
+- **The synthetic corpus cannot answer any question about vocabulary growth.**
+  Fitting Heaps' law over the six sizes gives an exponent of 0.257 against a
+  published English range of 0.4 to 0.6, with fit errors swinging from +20 to
+  -15 percent. The generator draws from 100,000 distinct words and the corpus has
+  found 99,992 of them by 20,000 documents, so vocabulary flattens because there
+  is nothing left to discover. Every measurement here that does not depend on
+  vocabulary stands; anything that does needs real text.
+
+Reproduce all of the above with `uv run python benchmarks/at_scale.py`.
 
 ## [0.3.0] - 2026-09-07
 
