@@ -16,12 +16,13 @@ machine.
 
 from __future__ import annotations
 
-import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
+
+from corpus import fixed_length_corpus, make_vocabulary
 
 from search_engine.index import InvertedIndex
 from search_engine.persistence import load, save, save_text
@@ -32,29 +33,6 @@ VOCABULARY_SIZE = 8_000
 SEED = 20260903
 REPEATS = 7
 
-STEMS = (
-    "connect",
-    "compute",
-    "retrieve",
-    "document",
-    "position",
-    "invert",
-    "rank",
-    "score",
-    "weight",
-    "frequent",
-    "index",
-    "search",
-    "query",
-    "term",
-    "vector",
-    "normal",
-    "similar",
-    "relate",
-    "general",
-    "national",
-)
-SUFFIXES = ("", "s", "ed", "ing", "ion", "ions", "al", "ally", "ive", "ness")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,25 +46,6 @@ class Measurement:
     file_bytes: int
     save_seconds: float
     load_seconds: float
-
-
-def make_vocabulary(size: int) -> list[str]:
-    """Build distinct inflected words, so stemming has real work to do."""
-    words: list[str] = []
-    for number in range(size):
-        base = STEMS[number % len(STEMS)]
-        suffix = SUFFIXES[(number // len(STEMS)) % len(SUFFIXES)]
-        words.append(f"{base}{suffix}{number // (len(STEMS) * len(SUFFIXES))}")
-    return words
-
-
-def make_corpus(rng: random.Random, vocabulary: list[str]) -> list[str]:
-    """Generate documents whose term frequencies follow a Zipf-like curve."""
-    weights = [1.0 / (rank + 1) for rank in range(len(vocabulary))]
-    return [
-        " ".join(rng.choices(vocabulary, weights=weights, k=TOKENS_PER_DOCUMENT))
-        for _ in range(DOCUMENT_COUNT)
-    ]
 
 
 def build(corpus: list[str]) -> InvertedIndex:
@@ -177,8 +136,9 @@ def compare(
 
 def main() -> None:
     """Run the benchmark and print a report."""
-    rng = random.Random(SEED)
-    corpus = make_corpus(rng, make_vocabulary(VOCABULARY_SIZE))
+    corpus = fixed_length_corpus(
+        DOCUMENT_COUNT, TOKENS_PER_DOCUMENT, make_vocabulary(VOCABULARY_SIZE)
+    )
     index = build(corpus)
     source_bytes = sum(len(text) for text in corpus)
     _, occurrences = describe(index, source_bytes)
