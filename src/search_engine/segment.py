@@ -42,6 +42,7 @@ from __future__ import annotations
 import mmap
 import zlib
 from dataclasses import dataclass
+from math import isqrt
 from typing import TYPE_CHECKING, Final, Self
 
 from search_engine.analysis import fingerprint
@@ -63,6 +64,10 @@ if TYPE_CHECKING:
 SEGMENT_HEADER: Final = b"search-engine-segment v1\n"
 
 TERMS_PER_BLOCK: Final = 16
+
+# Below this a postings list is short enough that walking it beats reading a
+# skip list first, so short lists pay nothing for the feature.
+SKIP_THRESHOLD: Final = 128
 
 # Bounded so a long-running reader cannot grow without limit. Superseded by a
 # real cache, keyed by segment so it cannot go stale, in a later release.
@@ -183,14 +188,133 @@ def _encode_postings(
 
 
 def _encode_term_postings(postings: Mapping[int, Sequence[int]]) -> bytes:
-    """Encode one term's postings the way the whole-file format already does."""
+    """Encode one term's postings, with a skip list when the list is long enough.
+
+    The document identifiers are encoded exactly as the whole-file format
+    encodes them, so the two stay comparable and the same decoder reads both.
+    """
     ordered = sorted(postings)
-    parts = [encode_number(len(ordered)), encode_sorted(ordered)]
+    identifiers, skips = _encode_identifiers(ordered)
+    parts = [skips, encode_number(len(ordered)), identifiers]
     for document_id in ordered:
         positions = list(postings[document_id])
         parts.append(encode_number(len(positions)))
         parts.append(encode_sorted(positions))
     return b"".join(parts)
+
+
+def _encode_identifiers(ordered: Sequence[int]) -> tuple[bytes, bytes]:
+    """Return the delta-encoded identifiers and a skip list into them.
+
+    A skip entry records a document identifier, the byte just past its gap, and
+    how many identifiers have been consumed by then, so a reader can resume
+    decoding from there and still know when to stop. There are isqrt(n) of
+    them, which balances scanning the skip list against scanning between skips:
+    both then cost O(sqrt(n)).
+    """
+    chunks: list[bytes] = []
+    ends: list[int] = []
+    previous = 0
+    running = 0
+    for document_id in ordered:
+        gap = encode_number(document_id - previous)
+        chunks.append(gap)
+        running += len(gap)
+        ends.append(running)
+        previous = document_id
+    identifiers = b"".join(chunks)
+    if len(ordered) < SKIP_THRESHOLD:
+        return identifiers, encode_number(0)
+    return identifiers, _encode_skips(ordered, ends)
+
+
+def _encode_skips(ordered: Sequence[int], ends: Sequence[int]) -> bytes:
+    count = isqrt(len(ordered))
+    interval = len(ordered) // count
+    positions = range(interval - 1, len(ordered) - 1, interval)
+    parts = [encode_number(len(positions))]
+    previous_id = 0
+    previous_end = 0
+    previous_at = -1
+    for at in positions:
+        parts.append(encode_number(ordered[at] - previous_id))
+        parts.append(encode_number(ends[at] - previous_end))
+        parts.append(encode_number(at - previous_at))
+        previous_id = ordered[at]
+        previous_end = ends[at]
+        previous_at = at
+    return b"".join(parts)
+
+
+def advance_to(data: Bytelike, entry: TermEntry, target: int) -> int | None:
+    """Return the first document identifier at or after target, or None.
+
+    Uses the block's skip list to jump most of the way when it has one, and
+    walks from the start when it does not.
+
+    Raises:
+        SegmentFormatError: If the postings are malformed.
+    """
+    try:
+        return _advance_to(data, entry, target)
+    except CodecError as error:
+        message = f"segment postings are malformed: {error}"
+        raise SegmentFormatError(message) from error
+
+
+def _advance_to(data: Bytelike, entry: TermEntry, target: int) -> int | None:
+    skips, cursor = read_skips(data, entry.offset)
+    count, cursor = decode_at(data, cursor)
+    start = cursor
+    current, offset, consumed = _last_skip_at_or_before(skips, target)
+    if consumed and current >= target:
+        return current
+    cursor = start + offset
+    for _ in range(count - consumed):
+        gap, cursor = decode_at(data, cursor)
+        current += gap
+        if current >= target:
+            return current
+    return None
+
+
+def read_skips(data: Bytelike, offset: int) -> tuple[list[tuple[int, int, int]], int]:
+    """Return a postings block's skip entries and the offset just past them.
+
+    Each entry is a document identifier, the byte just past its gap, and how
+    many identifiers precede it. A block with no skip list yields an empty list.
+    """
+    count, cursor = decode_at(data, offset)
+    skips: list[tuple[int, int, int]] = []
+    document_id = 0
+    end = 0
+    at = -1
+    for _ in range(count):
+        gap, cursor = decode_at(data, cursor)
+        step, cursor = decode_at(data, cursor)
+        stride, cursor = decode_at(data, cursor)
+        document_id += gap
+        end += step
+        at += stride
+        skips.append((document_id, end, at + 1))
+    return skips, cursor
+
+
+def _last_skip_at_or_before(
+    skips: Sequence[tuple[int, int, int]], target: int
+) -> tuple[int, int, int]:
+    """Return the furthest skip that cannot have passed the target.
+
+    The third value is how many identifiers that skip has already consumed,
+    which is what tells the walk after it when to stop rather than reading on
+    into the positions that follow.
+    """
+    found = (0, 0, 0)
+    for entry in skips:
+        if entry[0] > target:
+            break
+        found = entry
+    return found
 
 
 def decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
@@ -210,7 +334,7 @@ def decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int
 
 
 def _decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
-    cursor = entry.offset
+    _, cursor = read_skips(data, entry.offset)
     count, cursor = decode_at(data, cursor)
     document_ids, cursor = decode_sorted_at(data, cursor, count)
     postings: dict[int, list[int]] = {}
@@ -655,3 +779,21 @@ class SegmentReader:
     def document_ids(self) -> Iterable[int]:
         """Return every document identifier, in ascending order."""
         return tuple(self._document_ids)
+
+    @property
+    def raw(self) -> memoryview:
+        """Return the mapped bytes, for a caller decoding postings itself.
+
+        Early termination walks postings without materialising them, which the
+        postings mapping cannot express.
+        """
+        return self._view
+
+    @property
+    def dictionary(self) -> TermDictionary:
+        """Return the term dictionary, for a caller that needs entries directly.
+
+        An entry carries the document frequency and the highest term frequency,
+        which is what an upper bound on a term's score is computed from.
+        """
+        return self._dictionary

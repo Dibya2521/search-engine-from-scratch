@@ -24,15 +24,25 @@ from __future__ import annotations
 import time
 import tracemalloc
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
 from corpus import fixed_length_corpus, make_vocabulary
 
+from search_engine.codecs import decode_at
 from search_engine.index import InvertedIndex
 from search_engine.persistence import load, save
-from search_engine.segment import SegmentReader, write_segment
+from search_engine.segment import (
+    SegmentReader,
+    TermDictionary,
+    TermEntry,
+    advance_to,
+    decode_term_postings,
+    read_skips,
+    write_segment,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,6 +52,7 @@ TOKENS_PER_DOCUMENT = 100
 VOCABULARY_SIZE = 8_000
 QUERY_COUNT = 300
 REPEATS = 5
+SKIP_PROBES = 200
 BYTES_PER_MB = 1_000_000
 
 
@@ -190,6 +201,98 @@ def main() -> None:
             measure_segment(segment, terms, verify=False),
         ]
         report(results, sizes)
+        measure_skipping(segment, terms)
+
+
+def measure_skipping(path: Path, terms: list[str]) -> None:
+    """Compare finding one document against decoding the whole postings list.
+
+    This is the question skip pointers exist to answer: whether a term matches a
+    given document, which is what an intersection asks over and over. Decoding
+    the list answers it too, and the comparison is only interesting on a list
+    long enough to carry a skip list at all.
+    """
+    with SegmentReader(path) as reader:
+        data = reader.raw
+        dictionary = reader.dictionary
+        rows: list[tuple[str, int, float, float, float]] = []
+        for term in _by_length(dictionary, terms):
+            entry = dictionary.lookup(term)
+            if entry is None:
+                continue
+            targets = _targets(data, entry)
+            decoded = min(
+                _time(partial(_find_by_decoding, data, entry, targets))
+                for _ in range(REPEATS)
+            )
+            skipped = min(
+                _time(partial(_find_by_skipping, data, entry, targets))
+                for _ in range(REPEATS)
+            )
+            walked = min(
+                _time(partial(_find_by_walking, data, entry, targets))
+                for _ in range(REPEATS)
+            )
+            rows.append((term, entry.document_frequency, decoded, walked, skipped))
+
+    print()
+    print(
+        f"| Term | Postings | Decode the list, {SKIP_PROBES} lookups s "
+        f"| Walk identifiers s | Use the skip list s | Skipping alone |"
+    )
+    print("| --- | ---: | ---: | ---: | ---: | ---: |")
+    for term, frequency, decoded, walked, skipped in rows:
+        print(
+            f"| {term} | {frequency:,} | {decoded:.4f} | {walked:.4f} "
+            f"| {skipped:.4f} | {(skipped - walked) / walked:+.1%} |"
+        )
+
+
+def _by_length(dictionary: TermDictionary, terms: list[str]) -> list[str]:
+    """Return one term from each of several postings-list lengths."""
+    entries = [(term, dictionary.lookup(term)) for term in terms]
+    lengths = sorted(
+        ((entry.document_frequency, term) for term, entry in entries if entry),
+        reverse=True,
+    )
+    picks = [lengths[0], lengths[len(lengths) // 4], lengths[len(lengths) // 2]]
+    return [term for _, term in picks]
+
+
+def _targets(data: memoryview, entry: TermEntry) -> list[int]:
+    """Pick documents spread across the postings list, so no probe is favoured."""
+    identifiers = sorted(decode_term_postings(data, entry))
+    step = max(1, len(identifiers) // SKIP_PROBES)
+    return identifiers[::step][:SKIP_PROBES]
+
+
+def _find_by_decoding(data: memoryview, entry: TermEntry, targets: list[int]) -> int:
+    return sum(target in decode_term_postings(data, entry) for target in targets)
+
+
+def _find_by_skipping(data: memoryview, entry: TermEntry, targets: list[int]) -> int:
+    return sum(advance_to(data, entry, target) == target for target in targets)
+
+
+def _find_by_walking(data: memoryview, entry: TermEntry, targets: list[int]) -> int:
+    """Walk the identifiers from the start, ignoring the skip list.
+
+    Isolates what skipping is worth. Without this column the comparison would
+    credit skip pointers for not decoding positions, which advance_to avoids
+    whether a skip list exists or not.
+    """
+    found = 0
+    for target in targets:
+        _, cursor = read_skips(data, entry.offset)
+        count, cursor = decode_at(data, cursor)
+        current = 0
+        for _ in range(count):
+            gap, cursor = decode_at(data, cursor)
+            current += gap
+            if current >= target:
+                break
+        found += current == target
+    return found
 
 
 if __name__ == "__main__":

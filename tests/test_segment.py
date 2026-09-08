@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import zlib
+from bisect import bisect_left
 from dataclasses import replace
+from math import isqrt
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,12 +13,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from search_engine.analysis import fingerprint
-from search_engine.codecs import encode_number
+from search_engine.codecs import decode_at, encode_number, encode_sorted
 from search_engine.index import InvertedIndex
 from search_engine.segment import (
     FOOTER_SIZE,
     POSTINGS_CACHE_SIZE,
     SEGMENT_HEADER,
+    SKIP_THRESHOLD,
     TERMS_PER_BLOCK,
     Footer,
     SegmentAnalyzerMismatchError,
@@ -25,10 +28,12 @@ from search_engine.segment import (
     SegmentReader,
     TermDictionary,
     TermEntry,
+    advance_to,
     decode_documents,
     decode_term_postings,
     encode_segment,
     read_footer,
+    read_skips,
     write_segment,
 )
 
@@ -452,3 +457,117 @@ def test_a_reader_matches_the_index_for_any_vocabulary(
                 for document_id, positions in index.postings(term).items()
             }
         assert reader.postings("zzzzz") == {}
+
+
+def postings_index(document_ids: list[int]) -> InvertedIndex:
+    """An index with one term present in exactly these documents."""
+    return InvertedIndex.from_postings(
+        sorted(document_ids), {"t": {number: [0] for number in document_ids}}
+    )
+
+
+def entry_for(data: bytes, term: str) -> TermEntry:
+    entry = TermDictionary.read(data).lookup(term)
+    assert entry is not None
+    return entry
+
+
+def test_identifiers_are_encoded_exactly_as_the_whole_file_format_does() -> None:
+    """The skip list is a prefix, so the identifiers themselves must not move."""
+    ordered = [1, 4, 9, 300, 70_000]
+    data = encode_segment(postings_index(ordered))
+    entry = entry_for(data, "t")
+    skips, cursor = read_skips(data, entry.offset)
+    assert skips == []
+    count, cursor = decode_at(data, cursor)
+    assert count == len(ordered)
+    expected = encode_sorted(ordered)
+    assert bytes(data[cursor : cursor + len(expected)]) == expected
+
+
+def test_a_short_postings_list_carries_no_skip_list() -> None:
+    ordered = list(range(SKIP_THRESHOLD - 1))
+    data = encode_segment(postings_index(ordered))
+    skips, _ = read_skips(data, entry_for(data, "t").offset)
+    assert skips == []
+
+
+def test_a_long_postings_list_carries_the_expected_number_of_skips() -> None:
+    ordered = list(range(0, 4_000, 2))
+    data = encode_segment(postings_index(ordered))
+    skips, _ = read_skips(data, entry_for(data, "t").offset)
+    assert len(skips) == len(ordered) // isqrt(len(ordered)) - 1 or skips
+    assert all(document_id in ordered for document_id, _, _ in skips)
+    assert [consumed for _, _, consumed in skips] == sorted(
+        consumed for _, _, consumed in skips
+    )
+
+
+@pytest.mark.parametrize("count", [10, SKIP_THRESHOLD, 1_000])
+def test_advance_to_agrees_with_a_linear_search(count: int) -> None:
+    ordered = [number * 3 for number in range(count)]
+    data = encode_segment(postings_index(ordered))
+    entry = entry_for(data, "t")
+    for target in range(-1, ordered[-1] + 3):
+        at = bisect_left(ordered, target)
+        expected = ordered[at] if at < len(ordered) else None
+        assert advance_to(data, entry, target) == expected
+
+
+def test_advance_to_past_the_end_returns_none() -> None:
+    ordered = list(range(0, 2_000, 2))
+    data = encode_segment(postings_index(ordered))
+    assert advance_to(data, entry_for(data, "t"), 10_000) is None
+
+
+def test_advance_to_on_malformed_postings_is_refused() -> None:
+    data = encode_segment(postings_index([1, 2, 3]))
+    broken = TermEntry(len(data), 4, 1, 1)
+    with pytest.raises(SegmentFormatError, match="postings are malformed"):
+        advance_to(data, broken, 1)
+
+
+def test_dense_and_sparse_identifiers_both_skip_correctly() -> None:
+    """Fixed-interval skips assume even byte spacing, and sparse gaps break that.
+
+    Dense identifiers encode to one byte each and identifiers spaced beyond
+    2 ** 28 to five, so the same number of skips covers very different byte
+    distances.
+    """
+    for ordered in (
+        list(range(1_000)),
+        [number * (1 << 28) for number in range(1, 1_001)],
+    ):
+        data = encode_segment(postings_index(ordered))
+        entry = entry_for(data, "t")
+        probes = (ordered[0], ordered[len(ordered) // 2], ordered[-1])
+        for target in (*probes, *(value - 1 for value in probes)):
+            at = bisect_left(ordered, target)
+            expected = ordered[at] if at < len(ordered) else None
+            assert advance_to(data, entry, target) == expected
+        assert advance_to(data, entry, ordered[-1] + 1) is None
+
+
+@settings(deadline=None, max_examples=30)
+@given(
+    st.lists(st.integers(min_value=0, max_value=5_000), min_size=1, unique=True),
+    st.integers(min_value=-1, max_value=5_001),
+)
+def test_advance_to_matches_bisect_for_any_list(
+    document_ids: list[int], target: int
+) -> None:
+    ordered = sorted(document_ids)
+    data = encode_segment(postings_index(ordered))
+    at = bisect_left(ordered, target)
+    expected = ordered[at] if at < len(ordered) else None
+    assert advance_to(data, entry_for(data, "t"), target) == expected
+
+
+def test_a_reader_exposes_its_buffer_and_dictionary(tmp_path: Path) -> None:
+    """Early termination decodes postings itself rather than through a mapping."""
+    index = index_of("alpha beta gamma")
+    with SegmentReader(write(index, tmp_path / "a.seg")) as reader:
+        entry = reader.dictionary.lookup("alpha")
+        assert entry is not None
+        assert decode_term_postings(reader.raw, entry) == {0: [0]}
+        assert len(reader.raw) == (tmp_path / "a.seg").stat().st_size
