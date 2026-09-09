@@ -16,7 +16,52 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `search_engine.writer`, which buffers documents and flushes them as immutable
+  segments, and `search_engine.directory`, which reads every published segment
+  as one index. Both satisfy the same protocol as the in-memory index, so
+  querying and ranking work against them unchanged.
+- `search_engine.manifest`, the file that decides which segments exist. Replaced
+  atomically, so a crash leaves the previous one whole. A segment it does not
+  name is never opened, which is the whole of crash recovery.
+- `search_engine.tombstones`, recording deleted documents beside a segment,
+  since a posting cannot be removed from an immutable file.
+- `search_engine.merge`, a tiered merge policy combining four segments of a tier
+  into one, repeated until no tier is full. Deleted documents are dropped rather
+  than carried across, which is where their space comes back.
+- `search_engine.wal`, an append-only log holding accepted documents until they
+  are durable in a published segment.
+- `SegmentBuilder`, which writes a segment one term at a time, so a merge holds
+  the vocabulary and the document list but never the postings.
+- `docs/13-segments.md` and ADR 0005.
+- `benchmarks/segments.py`, measuring what a query costs as segments accumulate.
+
+### Changed
+
+- **Adding a document is now an upsert.** Ingestion is at-least-once, so the
+  same document arrives twice and indexing has to be idempotent.
+  `DuplicateDocumentError` stays on `InvertedIndex`, where a repeated identifier
+  in a single-shot build is a bug in the corpus; the tolerance belongs in the
+  writer, which is the layer that can make an older copy invisible.
+- `SegmentReader` takes `cache=False`. A merge reads every term exactly once, so
+  a cache holds everything it has already passed and buys nothing.
+
+### Measured
+
+- **Sixteen segments cost 46 percent more per term than one**, and two and a
+  half times as much to open. That is a moderate cost at this scale rather than
+  the dramatic one the usual argument implies, and it is stated that way. The
+  reason to merge anyway is that segment count is otherwise unbounded.
+- **Durability costs a factor of 25.5** in write throughput: 75,407 documents
+  per second without `fsync` against 2,955 with it. It stays on by default,
+  because a silently lost document is the worst failure a data system has.
+- **Merging streams rather than materialising**, at less than a third of the
+  peak memory of building the merged index first. An earlier version was 8.2x
+  worse again, 6.9 MB against 842 kB, because the reader cached postings the
+  merge reads once.
+
+Reproduce with `uv run python benchmarks/segments.py`.
 
 ## [0.4.0] - 2026-09-08
 

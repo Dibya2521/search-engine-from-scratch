@@ -7,6 +7,14 @@ bugs, because file formats fail quietly.
 Implemented at [`src/search_engine/corpus.py`](../src/search_engine/corpus.py)
 and [`src/search_engine/persistence.py`](../src/search_engine/persistence.py).
 
+
+> **Two formats have replaced this one for anything at scale.** The text format
+> described here is still written by `save_text` and still read by `load`, and
+> it is no longer what `save` produces. See `docs/10-compression.md` for the
+> compressed binary format, `docs/12-on-disk-index.md` for the segment that is
+> read without being loaded, and `docs/13-segments.md` for an index kept as many
+> segments with a manifest, tombstones and merges.
+
 ## Reading the corpus
 
 ### The format
