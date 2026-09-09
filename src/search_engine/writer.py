@@ -35,6 +35,7 @@ from search_engine.manifest import Manifest, SegmentInfo
 from search_engine.merge import merge_once
 from search_engine.segment import SegmentReader, stored_checksum, write_segment
 from search_engine.tombstones import Tombstones, tombstone_name
+from search_engine.wal import LOG_NAME, Kind, Record, WriteAheadLog
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,12 +85,17 @@ class IndexWriter:
         buffer_documents: int = DEFAULT_BUFFER_DOCUMENTS,
         *,
         merge: bool = True,
+        sync: bool = True,
     ) -> None:
         """Open a writer over a directory, creating it if it does not exist.
 
         Merging runs after each flush by default. Turning it off leaves the
         segments as they were written, which is what a benchmark comparing the
         two wants and is not a sensible way to run an index.
+
+        ``sync`` forces every accepted document to the disk before the call
+        returns. It is what durability costs, and turning it off is for
+        measuring that cost rather than for running an index.
 
         Raises:
             ValueError: If the buffer would hold no documents.
@@ -109,6 +115,21 @@ class IndexWriter:
         self._next = max(self._manifest.next_segment, next_segment_number(directory))
         self._locations = self._locate_documents()
         self._pending: dict[str, set[int]] = {}
+        self._log = WriteAheadLog(directory / LOG_NAME, sync=sync)
+        self._recover()
+
+    def _recover(self) -> None:
+        """Replay whatever the log still holds.
+
+        Everything in it was accepted and may or may not have reached a
+        segment. Replaying a document that did is harmless because adding is an
+        upsert, which is the property that makes recovery this simple.
+        """
+        for record in self._log.replay():
+            if record.kind is Kind.ADD:
+                self._accept(record.document_id, record.text)
+            else:
+                self._remove(record.document_id)
 
     def _locate_documents(self) -> dict[int, tuple[str, int]]:
         """Map every published identifier to its segment and its ordinal there.
@@ -135,12 +156,16 @@ class IndexWriter:
         Adding the same identifier twice is a no-op rather than an error, which
         is what makes replaying an at-least-once stream safe.
         """
+        self._log.append(Record(Kind.ADD, document_id, text))
+        self._accept(document_id, text)
+
+    def _accept(self, document_id: int, text: str) -> None:
         if (
             document_id not in self._buffer
             and len(self._buffer) >= self._buffer_documents
         ):
             self.flush()
-        self.delete(document_id)
+        self._remove(document_id)
         self._buffer[document_id] = text
 
     def delete(self, document_id: int) -> bool:
@@ -149,6 +174,10 @@ class IndexWriter:
         Deleting one that does not exist is not an error, for the same reason
         that adding one twice is not.
         """
+        self._log.append(Record(Kind.DELETE, document_id))
+        return self._remove(document_id)
+
+    def _remove(self, document_id: int) -> bool:
         if self._buffer.pop(document_id, None) is not None:
             return True
         found = self._locations.pop(document_id, None)
@@ -173,6 +202,7 @@ class IndexWriter:
         if not self._buffer:
             if deletions:
                 self._publish(deletions)
+                self._log.truncate()
             return None
 
         name = segment_name(self._next)
@@ -190,6 +220,10 @@ class IndexWriter:
         self._buffer = {}
         published = deletions or list(self._manifest.segments)
         self._publish([*published, info])
+        # Only once the manifest names the segment. A crash before this replays
+        # documents that are already indexed, which upsert makes a no-op; a
+        # crash after truncating first would lose them.
+        self._log.truncate()
         return name
 
     def _analyse(self) -> InvertedIndex:
@@ -250,8 +284,9 @@ class IndexWriter:
             self._locations = self._locate_documents()
 
     def close(self) -> None:
-        """Flush anything still buffered or deleted."""
+        """Flush anything still buffered or deleted, and close the log."""
         self.flush()
+        self._log.close()
 
     def __enter__(self) -> Self:
         """Return the writer, so it can be used as a context manager."""
