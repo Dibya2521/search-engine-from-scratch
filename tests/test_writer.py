@@ -158,3 +158,16 @@ def test_any_buffer_size_stores_the_same_documents(
         for document_id, text in documents.items():
             writer.add(document_id, text)
     assert read_all(directory) == in_memory(documents)
+
+
+def test_the_writer_exposes_the_manifest_it_published(tmp_path: Path) -> None:
+    """A full buffer is flushed when the next document arrives, not before."""
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        writer.add(0, "alpha")
+        assert writer.manifest.generation == 0
+        writer.add(1, "beta")
+        assert writer.manifest.generation == 1
+        assert writer.manifest.document_count == 1
+    assert writer.manifest.generation == 2
+    assert writer.manifest.document_count == 2
+    assert writer.manifest.next_segment == 2

@@ -500,6 +500,11 @@ def read_footer(data: Bytelike, *, verify: bool = True) -> Footer:
     return Footer(*fields)
 
 
+def stored_checksum(data: Bytelike) -> int:
+    """Return the checksum a segment file carries, without recomputing it."""
+    return int.from_bytes(data[-_CHECKSUM_BYTES:], "big")
+
+
 def verify_checksum(data: Bytelike) -> None:
     """Check a segment against its stored checksum.
 

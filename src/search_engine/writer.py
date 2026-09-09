@@ -22,8 +22,10 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Final, Self
 
+from search_engine import manifest as manifest_file
 from search_engine.index import InvertedIndex
-from search_engine.segment import write_segment
+from search_engine.manifest import Manifest, SegmentInfo
+from search_engine.segment import stored_checksum, write_segment
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -80,8 +82,11 @@ class IndexWriter:
         self._directory = directory
         self._buffer_documents = buffer_documents
         self._buffer = InvertedIndex()
-        self._next = next_segment_number(directory)
-        self._segments: list[str] = []
+        self._manifest = manifest_file.read(directory)
+        # Orphans left by a crash are invisible, and their numbers are still
+        # spent: reusing one would give a stale mapping a file that has changed
+        # meaning underneath it.
+        self._next = max(self._manifest.next_segment, next_segment_number(directory))
 
     def add(self, document_id: int, text: str) -> None:
         """Buffer a document, flushing first if the buffer is already full.
@@ -94,22 +99,34 @@ class IndexWriter:
         self._buffer.add_document(document_id, text)
 
     def flush(self) -> str | None:
-        """Write the buffer as a segment and return its name.
+        """Write the buffer as a segment, publish it, and return its name.
 
         Returns None and writes nothing when the buffer is empty, so flushing
         twice or closing an untouched writer costs nothing.
 
-        The segment is written but not yet published: nothing records that it
-        exists, which is what the manifest is for.
+        The segment file is written first and the manifest second, and that
+        order is the whole of the crash safety. A process that dies between the
+        two leaves a file nothing names, which the next open ignores. Publishing
+        first would name a file that does not exist.
         """
         if self._buffer.document_count == 0:
             return None
         name = segment_name(self._next)
-        write_segment(self._buffer, self._directory / name)
+        path = self._directory / name
+        write_segment(self._buffer, path)
+        info = SegmentInfo(
+            name=name,
+            documents=self._buffer.document_count,
+            checksum=stored_checksum(path.read_bytes()),
+        )
         self._next += 1
-        self._segments.append(name)
+        self._publish([*self._manifest.segments, info])
         self._buffer = InvertedIndex()
         return name
+
+    def _publish(self, segments: list[SegmentInfo]) -> None:
+        self._manifest = self._manifest.with_segments(segments, self._next)
+        manifest_file.publish(self._directory, self._manifest)
 
     def close(self) -> None:
         """Flush anything still buffered."""
@@ -135,5 +152,10 @@ class IndexWriter:
 
     @property
     def segments(self) -> tuple[str, ...]:
-        """Return the names of the segments this writer has written."""
-        return tuple(self._segments)
+        """Return the names of the published segments, oldest first."""
+        return tuple(segment.name for segment in self._manifest.segments)
+
+    @property
+    def manifest(self) -> Manifest:
+        """Return the manifest as it now stands."""
+        return self._manifest
