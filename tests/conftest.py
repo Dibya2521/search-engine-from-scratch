@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from search_engine.cli import main as cli_main
-from search_engine.index import InvertedIndex
+from search_engine.index import InvertedIndex, ReadableIndex
 from search_engine.ranking import Ranker
+from search_engine.writer import IndexWriter
 
 SAMPLE_CORPUS = Path(__file__).parent / "fixtures" / "sample_corpus.xml"
 
@@ -81,3 +82,25 @@ def built_index(tmp_path: Path) -> Path:
     path = tmp_path / "sample.index"
     assert cli_main(["index", str(SAMPLE_CORPUS), str(path)]) == 0
     return path
+
+
+def write_segments(directory: Path, texts: dict[int, str], buffer: int = 1) -> None:
+    """Write documents into a directory as segments, without merging them."""
+    with IndexWriter(directory, buffer_documents=buffer, merge=False) as writer:
+        for document_id, text in texts.items():
+            writer.add(document_id, text)
+
+
+def assert_same_postings(actual: ReadableIndex, expected: InvertedIndex) -> None:
+    """Assert an index holds exactly what a single in-memory index would.
+
+    Shared by the segmented and the merged readers, which have to agree with
+    the same reference and would otherwise each carry a copy of this.
+    """
+    assert actual.document_count == expected.document_count
+    assert sorted(actual.terms) == sorted(expected.terms)
+    for term in expected.terms:
+        assert actual.postings(term) == {
+            document_id: list(positions)
+            for document_id, positions in expected.postings(term).items()
+        }

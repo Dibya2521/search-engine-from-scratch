@@ -154,6 +154,11 @@ class DirectoryIndex:
     def vocabulary_size(self) -> int:
         """Return how many distinct terms the segments hold between them.
 
+        This counts what the files contain, so a term left behind by a deleted
+        document is still counted until a merge drops it. Establishing that a
+        term has no live document left would mean reading its postings, and
+        that is a high price for a number nothing scores with.
+
         Counting the union means visiting every term of every segment, so the
         answer is computed once and kept. It does not change, because the
         segments this reader holds do not.

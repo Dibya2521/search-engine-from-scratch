@@ -39,6 +39,7 @@ reading its postings at all.
 
 from __future__ import annotations
 
+import io
 import mmap
 import zlib
 from dataclasses import dataclass
@@ -58,6 +59,7 @@ from search_engine.codecs import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from pathlib import Path
+    from typing import IO
 
     from search_engine.index import InvertedIndex
 
@@ -123,58 +125,38 @@ class Footer:
     vocabulary_size: int
 
 
-def write_segment(index: InvertedIndex, path: Path) -> None:
-    """Write an in-memory index to a segment file."""
-    path.write_bytes(encode_segment(index))
+class SegmentBuilder:
+    """Writes a segment one term at a time, in ascending term order.
 
+    Postings go to the sink as each term arrives, so building a segment costs
+    memory proportional to the vocabulary and the document count rather than to
+    the postings, which are the overwhelming majority of the bytes. That is what
+    lets a merge combine segments far larger than memory.
 
-def encode_segment(index: InvertedIndex) -> bytes:
-    """Return the bytes of a segment file for this index."""
-    prologue = _encode_prologue()
-    postings, entries = _encode_postings(index, len(prologue))
-    dictionary, block_index = _encode_dictionary(entries)
+    Terms must arrive sorted, because the dictionary is front coded against the
+    term before and binary searched afterwards. Nothing checks it on every call;
+    a merge produces them in order by construction and a caller that does not is
+    writing a file it cannot read back.
+    """
 
-    dictionary_offset = len(prologue) + len(postings)
-    block_index_offset = dictionary_offset + len(dictionary)
-    documents = _encode_documents(index)
-    documents_offset = block_index_offset + len(block_index)
+    def __init__(self, sink: IO[bytes], document_ids: Sequence[int]) -> None:
+        """Take an open binary sink and the identifiers the segment will hold."""
+        self._sink = sink
+        self._document_ids = sorted(document_ids)
+        self._lengths: dict[int, int] = {}
+        self._entries: list[tuple[str, TermEntry]] = []
+        self._checksum = 0
+        self._offset = 0
+        self._write(_encode_prologue())
 
-    footer = Footer(
-        dictionary_offset=dictionary_offset,
-        dictionary_length=len(dictionary),
-        block_index_offset=block_index_offset,
-        block_index_length=len(block_index),
-        documents_offset=documents_offset,
-        documents_length=len(documents),
-        document_count=index.document_count,
-        vocabulary_size=len(entries),
-    )
-    body = prologue + postings + dictionary + block_index + documents
-    body += _encode_footer(footer)
-    return body + zlib.crc32(body).to_bytes(_CHECKSUM_BYTES, "big")
-
-
-def _encode_prologue() -> bytes:
-    stamp = fingerprint().encode("ascii")
-    return SEGMENT_HEADER + encode_number(len(stamp)) + stamp
-
-
-def _encode_postings(
-    index: InvertedIndex, start: int
-) -> tuple[bytes, list[tuple[str, TermEntry]]]:
-    """Encode every term's postings, and record where each one landed."""
-    parts: list[bytes] = []
-    entries: list[tuple[str, TermEntry]] = []
-    offset = start
-    for term in sorted(index.terms):
-        postings = index.postings(term)
+    def add(self, term: str, postings: Mapping[int, Sequence[int]]) -> None:
+        """Append one term's postings and record where they landed."""
         block = _encode_term_postings(postings)
-        parts.append(block)
-        entries.append(
+        self._entries.append(
             (
                 term,
                 TermEntry(
-                    offset=offset,
+                    offset=self._offset,
                     length=len(block),
                     document_frequency=len(postings),
                     max_term_frequency=max(
@@ -183,8 +165,68 @@ def _encode_postings(
                 ),
             )
         )
-        offset += len(block)
-    return b"".join(parts), entries
+        for document_id, positions in postings.items():
+            self._lengths[document_id] = self._lengths.get(document_id, 0) + len(
+                positions
+            )
+        self._write(block)
+
+    def finish(self) -> None:
+        """Write the dictionary, the documents and the footer."""
+        dictionary, block_index = _encode_dictionary(self._entries)
+        dictionary_offset = self._offset
+        self._write(dictionary)
+        block_index_offset = self._offset
+        self._write(block_index)
+        documents_offset = self._offset
+        documents = _encode_document_section(self._document_ids, self._lengths)
+        self._write(documents)
+        self._write(
+            _encode_footer(
+                Footer(
+                    dictionary_offset=dictionary_offset,
+                    dictionary_length=len(dictionary),
+                    block_index_offset=block_index_offset,
+                    block_index_length=len(block_index),
+                    documents_offset=documents_offset,
+                    documents_length=len(documents),
+                    document_count=len(self._document_ids),
+                    vocabulary_size=len(self._entries),
+                )
+            )
+        )
+        self._sink.write(self._checksum.to_bytes(_CHECKSUM_BYTES, "big"))
+
+    def _write(self, data: bytes) -> None:
+        self._sink.write(data)
+        self._checksum = zlib.crc32(data, self._checksum)
+        self._offset += len(data)
+
+
+def write_segment(index: InvertedIndex, path: Path) -> None:
+    """Write an in-memory index to a segment file."""
+    with path.open("wb") as sink:
+        _build(index, sink)
+
+
+def encode_segment(index: InvertedIndex) -> bytes:
+    """Return the bytes of a segment file for this index."""
+    sink: IO[bytes] = io.BytesIO()
+    _build(index, sink)
+    sink.seek(0)
+    return sink.read()
+
+
+def _build(index: InvertedIndex, sink: IO[bytes]) -> None:
+    builder = SegmentBuilder(sink, sorted(index.document_ids))
+    for term in sorted(index.terms):
+        builder.add(term, index.postings(term))
+    builder.finish()
+
+
+def _encode_prologue() -> bytes:
+    stamp = fingerprint().encode("ascii")
+    return SEGMENT_HEADER + encode_number(len(stamp)) + stamp
 
 
 def _encode_term_postings(postings: Mapping[int, Sequence[int]]) -> bytes:
@@ -426,27 +468,20 @@ def _encode_block_index(starts: Sequence[tuple[bytes, int]]) -> bytes:
     return b"".join(parts)
 
 
-def _encode_documents(index: InvertedIndex) -> bytes:
-    document_ids = sorted(index.document_ids)
-    lengths = _document_lengths(index)
-    parts = [encode_number(len(document_ids)), encode_sorted(document_ids)]
+def _encode_document_section(
+    document_ids: Sequence[int], lengths: Mapping[int, int]
+) -> bytes:
+    """Encode the identifiers and each one's length in analysed tokens.
+
+    Lengths are stored so that a scorer with a length prior never has to
+    recover them by walking every posting, which against a mapped file would
+    read the whole thing on the first query.
+    """
+    parts = [encode_number(len(document_ids)), encode_sorted(list(document_ids))]
     parts.extend(
         encode_number(lengths.get(document_id, 0)) for document_id in document_ids
     )
     return b"".join(parts)
-
-
-def _document_lengths(index: InvertedIndex) -> dict[int, int]:
-    """Return each document's length in analysed tokens.
-
-    Costs one pass over the index at write time so that a reader never has to
-    make the same pass at query time.
-    """
-    lengths: dict[int, int] = {}
-    for term in index.terms:
-        for document_id, positions in index.postings(term).items():
-            lengths[document_id] = lengths.get(document_id, 0) + len(positions)
-    return lengths
 
 
 def _encode_footer(footer: Footer) -> bytes:
@@ -679,8 +714,12 @@ class SegmentReader:
     write.
     """
 
-    def __init__(self, path: Path, *, verify: bool = True) -> None:
+    def __init__(self, path: Path, *, verify: bool = True, cache: bool = True) -> None:
         """Open and map a segment file.
+
+        Caching decoded postings pays when terms repeat and is pure
+        overhead when they do not. A merge reads every term exactly once,
+        so it opens its inputs with caching off.
 
         Raises:
             SegmentFormatError: If the file is not a well-formed segment.
@@ -702,6 +741,7 @@ class SegmentReader:
             raise
         self._document_ids = ids
         self._lengths = dict(zip(ids, lengths, strict=True))
+        self._caching = cache
         self._cache: dict[str, dict[int, list[int]]] = {}
 
     def close(self) -> None:
@@ -737,6 +777,8 @@ class SegmentReader:
         if entry is None:
             return {}
         decoded = decode_term_postings(self._view, entry)
+        if not self._caching:
+            return decoded
         if len(self._cache) >= POSTINGS_CACHE_SIZE:
             # Replaced by the real cache, keyed by segment, in a later release.
             self._cache.clear()

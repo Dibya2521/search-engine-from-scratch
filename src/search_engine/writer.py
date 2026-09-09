@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Final, Self
 from search_engine import manifest as manifest_file
 from search_engine.index import InvertedIndex
 from search_engine.manifest import Manifest, SegmentInfo
+from search_engine.merge import merge_once
 from search_engine.segment import SegmentReader, stored_checksum, write_segment
 from search_engine.tombstones import Tombstones, tombstone_name
 
@@ -81,8 +82,14 @@ class IndexWriter:
         self,
         directory: Path,
         buffer_documents: int = DEFAULT_BUFFER_DOCUMENTS,
+        *,
+        merge: bool = True,
     ) -> None:
         """Open a writer over a directory, creating it if it does not exist.
+
+        Merging runs after each flush by default. Turning it off leaves the
+        segments as they were written, which is what a benchmark comparing the
+        two wants and is not a sensible way to run an index.
 
         Raises:
             ValueError: If the buffer would hold no documents.
@@ -93,6 +100,7 @@ class IndexWriter:
         directory.mkdir(parents=True, exist_ok=True)
         self._directory = directory
         self._buffer_documents = buffer_documents
+        self._merge = merge
         self._buffer: dict[int, str] = {}
         self._manifest = manifest_file.read(directory)
         # Orphans left by a crash are invisible, and their numbers are still
@@ -222,6 +230,24 @@ class IndexWriter:
     def _publish(self, segments: list[SegmentInfo]) -> None:
         self._manifest = self._manifest.with_segments(segments, self._next)
         manifest_file.publish(self._directory, self._manifest)
+        if self._merge:
+            self._merge_while_worthwhile()
+
+    def _merge_while_worthwhile(self) -> None:
+        """Merge until no tier is full.
+
+        One merge can fill the tier above it, so the policy is applied until it
+        stops firing rather than once per flush.
+        """
+        merged = False
+        while (published := merge_once(self._directory, self._manifest)) is not None:
+            self._manifest = published
+            merged = True
+        if merged:
+            self._next = max(self._next, self._manifest.next_segment)
+            # Ordinals move when segments combine, so every recorded location
+            # is stale and the only safe thing is to read them again.
+            self._locations = self._locate_documents()
 
     def close(self) -> None:
         """Flush anything still buffered or deleted."""
