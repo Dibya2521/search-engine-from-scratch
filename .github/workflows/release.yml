@@ -34,8 +34,16 @@ jobs:
           uv run pyright
           uv run pytest --cov --cov-report=term-missing
 
+      # Artifacts are stamped with the tagged commit's date rather than the
+      # moment the workflow happened to run, so the dates inside a release
+      # agree with the dates in the history. Hatchling honours
+      # SOURCE_DATE_EPOCH, which also makes the build reproducible.
       - name: Build sdist and wheel
-        run: uv build
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          echo "stamping artifacts with $SOURCE_DATE_EPOCH"
+          uv build
 
       # The tag must match the version the package reports, or the artifacts
       # attached to the release are not the ones the tag names.
