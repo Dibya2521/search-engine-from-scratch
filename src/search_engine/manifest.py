@@ -55,6 +55,12 @@ class SegmentInfo:
     name: str
     documents: int
     checksum: int
+    deleted: int = 0
+
+    @property
+    def live(self) -> int:
+        """Return how many of the segment's documents are still visible."""
+        return self.documents - self.deleted
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +74,16 @@ class Manifest:
 
     @property
     def document_count(self) -> int:
-        """Return how many documents the published segments hold in total."""
+        """Return how many documents are visible across the published segments.
+
+        Deleted documents are excluded, because a count that includes them
+        would make every inverse document frequency quietly wrong.
+        """
+        return sum(segment.live for segment in self.segments)
+
+    @property
+    def stored_count(self) -> int:
+        """Return how many documents the segments hold, deleted ones included."""
         return sum(segment.documents for segment in self.segments)
 
     def to_dict(self) -> dict[str, Any]:
@@ -83,6 +98,7 @@ class Manifest:
                     "name": segment.name,
                     "documents": segment.documents,
                     "checksum": segment.checksum,
+                    "deleted": segment.deleted,
                 }
                 for segment in self.segments
             ],
@@ -214,4 +230,5 @@ def _segment(entry: object) -> SegmentInfo:
         name=_field(fields, "name", str),
         documents=_field(fields, "documents", int),
         checksum=_field(fields, "checksum", int),
+        deleted=_field(fields, "deleted", int),
     )

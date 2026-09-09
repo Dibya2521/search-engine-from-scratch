@@ -8,8 +8,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from search_engine.index import DuplicateDocumentError, InvertedIndex
+from search_engine.index import InvertedIndex
 from search_engine.segment import SegmentReader
+from search_engine.tombstones import tombstone_name
 from search_engine.writer import (
     IndexWriter,
     next_segment_number,
@@ -113,12 +114,81 @@ def test_a_directory_is_created_if_it_is_missing(tmp_path: Path) -> None:
     assert nested.is_dir()
 
 
-def test_a_duplicate_in_one_buffer_is_still_refused(tmp_path: Path) -> None:
-    """Upsert belongs to the writer once it can tombstone. Until then this holds."""
+def test_adding_the_same_identifier_twice_replaces_it(tmp_path: Path) -> None:
+    """At-least-once delivery means the same document arrives more than once."""
     with IndexWriter(tmp_path) as writer:
         writer.add(0, "alpha")
-        with pytest.raises(DuplicateDocumentError):
-            writer.add(0, "beta")
+        writer.add(0, "beta")
+        assert writer.buffered == 1
+    assert writer.manifest.document_count == 1
+
+
+def test_replacing_a_published_document_tombstones_the_old_copy(
+    tmp_path: Path,
+) -> None:
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        writer.add(0, "alpha")
+        writer.add(1, "beta")
+        writer.add(0, "alpha again")
+    manifest = writer.manifest
+    assert manifest.stored_count == 3
+    assert manifest.document_count == 2
+    assert sum(segment.deleted for segment in manifest.segments) == 1
+    assert (tmp_path / tombstone_name(segment_name(0))).is_file()
+
+
+def test_adding_the_same_text_twice_leaves_one_visible_copy(tmp_path: Path) -> None:
+    """The idempotency requirement, stated as a test rather than an intention."""
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        writer.add(0, "alpha")
+        writer.add(1, "beta")
+        writer.add(0, "alpha")
+    assert writer.manifest.document_count == 2
+
+
+def test_deleting_a_buffered_document_writes_nothing(tmp_path: Path) -> None:
+    with IndexWriter(tmp_path) as writer:
+        writer.add(0, "alpha")
+        assert writer.delete(0) is True
+        assert writer.buffered == 0
+    assert writer.manifest.segments == ()
+
+
+def test_deleting_a_published_document_records_a_tombstone(tmp_path: Path) -> None:
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        writer.add(0, "alpha")
+        writer.add(1, "beta")
+        assert writer.delete(0) is True
+    assert writer.manifest.document_count == 1
+    assert writer.manifest.stored_count == 2
+
+
+def test_deleting_something_absent_is_not_an_error(tmp_path: Path) -> None:
+    with IndexWriter(tmp_path) as writer:
+        assert writer.delete(99) is False
+
+
+def test_deleting_every_document_leaves_none_visible(tmp_path: Path) -> None:
+    """The scorer divides by the live count, so it must not include the dead."""
+    with IndexWriter(tmp_path, buffer_documents=2) as writer:
+        writer.add(0, "alpha")
+        writer.add(1, "beta")
+        writer.flush()
+        writer.delete(0)
+        writer.delete(1)
+    assert writer.manifest.document_count == 0
+    assert writer.manifest.stored_count == 2
+
+
+def test_a_reopened_writer_sees_the_tombstones(tmp_path: Path) -> None:
+    """A deleted identifier must not be found again as a copy to replace."""
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        writer.add(0, "alpha")
+        writer.add(1, "beta")
+        writer.delete(0)
+    with IndexWriter(tmp_path, buffer_documents=1) as writer:
+        assert writer.delete(0) is False
+        assert writer.delete(1) is True
 
 
 def test_a_buffer_of_no_documents_is_refused(tmp_path: Path) -> None:
