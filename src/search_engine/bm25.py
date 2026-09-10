@@ -22,6 +22,13 @@ term frequency saturates and ``b`` how strongly length is corrected.
 Both quantities BM25 needs are already stored by the index: term frequency is
 the length of a position list, and document length is the sum of a document's
 position list lengths.
+
+Because the score rises with term frequency and falls with document length,
+the most a term can contribute to any document is fixed by the highest
+frequency it reaches and the shortest document in the corpus. `upper_bound`
+returns that value, and a caller holding one per query term can rule a document
+out before scoring it. The bound belongs here rather than with the caller so
+that it stays derived from the same `k1` and `b` the score itself uses.
 """
 
 from __future__ import annotations
@@ -84,6 +91,7 @@ class BM25Ranker(BaseRanker):
         }
         self._lengths = self._document_lengths()
         self._average_length = self._mean_length()
+        self._minimum_length = min(self._lengths.values(), default=0)
 
     def _document_lengths(self) -> dict[int, int]:
         """Return each document's length in terms, asked of the index.
@@ -131,6 +139,22 @@ class BM25Ranker(BaseRanker):
             if positions is not None:
                 total += weight * self._saturate(len(positions), length)
         return total
+
+    def upper_bound(self, term: str, max_frequency: int) -> float:
+        """Return the most this term can contribute to any document's score.
+
+        `max_frequency` is the term's highest frequency in any one document,
+        which a segment stores per term. The shortest document in the corpus is
+        used rather than the shortest document containing the term, because the
+        two need no postings read and the first is never an underestimate.
+
+        Call this only for a term some document holds. A term with no postings
+        has no frequency to bound, and on an empty corpus there is no average
+        length to correct against.
+        """
+        return self._idf.get(term, 0.0) * self._saturate(
+            max_frequency, self._minimum_length
+        )
 
     def _saturate(self, frequency: int, length: int) -> float:
         """Return the length-corrected, saturating term frequency component.

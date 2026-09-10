@@ -23,6 +23,10 @@ which projects to over 700 seconds per query on a realistic vocabulary.
 `BaseRanker` holds the parts that do not depend on the scoring formula, so that
 a second formula sees the same candidates, document frequencies and selection
 rule. Any difference in the results is then caused by the formula alone.
+
+`TopK` holds the same selection rule for a caller that produces scores one at a
+time instead of all at once, and that needs the score of the lowest result held
+so far while it works.
 """
 
 from __future__ import annotations
@@ -86,6 +90,56 @@ class StaleRankerError(RuntimeError):
         super().__init__(
             f"ranker was built for {built_for} documents, index now has {current}"
         )
+
+
+class TopK:
+    """The best scored documents so far, and the score a new one has to beat.
+
+    Selection matches `BaseRanker.rank`: highest score first, ties broken on the
+    lower document identifier. Scores arrive one at a time, so only the results
+    kept are held, which is what makes the threshold available before the last
+    document has been seen.
+    """
+
+    __slots__ = ("_heap", "_limit")
+
+    def __init__(self, limit: int) -> None:
+        """Hold at most `limit` results.
+
+        Raises:
+            ValueError: If limit is not positive.
+        """
+        if limit <= 0:
+            message = f"limit must be positive, got {limit}"
+            raise ValueError(message)
+        self._limit = limit
+        self._heap: list[tuple[float, int]] = []
+
+    def push(self, document_id: int, score: float) -> None:
+        """Keep a scored document if it belongs in the results."""
+        entry = (score, -document_id)
+        if len(self._heap) < self._limit:
+            heapq.heappush(self._heap, entry)
+        elif entry > self._heap[0]:
+            heapq.heapreplace(self._heap, entry)
+
+    @property
+    def threshold(self) -> float:
+        """Return the score of the lowest result held, or 0.0 until full.
+
+        Zero until the limit is reached, because until then any positive score
+        belongs in the results and nothing can be pruned.
+        """
+        if len(self._heap) < self._limit:
+            return 0.0
+        return self._heap[0][0]
+
+    def best(self) -> list[tuple[int, float]]:
+        """Return the results as ``(document_id, score)``, highest first."""
+        return [
+            (-negated_id, score)
+            for score, negated_id in sorted(self._heap, reverse=True)
+        ]
 
 
 class BaseRanker:

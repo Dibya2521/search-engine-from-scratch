@@ -9,6 +9,7 @@ the only thing that can catch the fast path drifting.
 
 from __future__ import annotations
 
+import heapq
 import math
 
 import pytest
@@ -20,6 +21,7 @@ from search_engine.query import search
 from search_engine.ranking import (
     Ranker,
     StaleRankerError,
+    TopK,
     cosine_similarity,
     inverse_document_frequency,
     normalize,
@@ -214,3 +216,49 @@ def test_a_document_vector_is_unit_length_or_empty(texts: list[str]) -> None:
         assert length == pytest.approx(0.0, abs=TOLERANCE) or length == pytest.approx(
             1.0, abs=TOLERANCE
         )
+
+
+@given(
+    scores=st.lists(
+        st.floats(min_value=0.001, max_value=100.0, allow_nan=False),
+        min_size=1,
+        max_size=40,
+    ),
+    limit=st.integers(min_value=1, max_value=8),
+)
+def test_incremental_selection_agrees_with_rank(
+    scores: list[float], limit: int
+) -> None:
+    """`TopK` and `rank` must select identically, or WAND cannot be exact.
+
+    `rank` sees every score at once and takes the largest; `TopK` sees them one
+    at a time and keeps the largest. They share a comparison key rather than an
+    implementation, so only a test holds them together.
+    """
+    keeper = TopK(limit)
+    for document_id, score in enumerate(scores):
+        keeper.push(document_id, score)
+    expected = heapq.nlargest(
+        limit, ((score, -document_id) for document_id, score in enumerate(scores))
+    )
+    assert keeper.best() == [(-negated, score) for score, negated in expected]
+
+
+def test_the_threshold_is_zero_until_the_limit_is_held() -> None:
+    """Nothing can be pruned while a result would still be accepted."""
+    keeper = TopK(2)
+    assert keeper.threshold == 0.0
+    keeper.push(1, 5.0)
+    assert keeper.threshold == 0.0
+    keeper.push(2, 3.0)
+    assert keeper.threshold == 3.0
+    keeper.push(3, 4.0)
+    assert keeper.threshold == 4.0
+    keeper.push(4, 1.0)
+    assert keeper.threshold == 4.0
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_a_selection_of_nothing_is_rejected(limit: int) -> None:
+    with pytest.raises(ValueError, match="limit must be positive"):
+        TopK(limit)

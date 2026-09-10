@@ -207,3 +207,42 @@ def test_the_formula_matches_a_hand_computation() -> None:
     correction = 1 - B + B * 3 / average
     expected = idf * (2 * (K1 + 1)) / (2 + K1 * correction)
     assert ranker.score(ranker.query_weights(["alpha"]), 1) == pytest.approx(expected)
+
+
+def assert_bounds_hold(corpus: dict[int, str]) -> None:
+    """No document may score above the bound early termination prunes with."""
+    index = index_of(corpus)
+    ranker = BM25Ranker(index)
+    for term in index.terms:
+        postings = index.postings(term)
+        highest = max(len(positions) for positions in postings.values())
+        bound = ranker.upper_bound(term, highest)
+        weights = ranker.query_weights([term])
+        for document_id in postings:
+            assert ranker.score(weights, document_id) <= bound
+
+
+def test_the_upper_bound_holds_on_the_ranking_corpus() -> None:
+    assert_bounds_hold(RANKING_CORPUS)
+
+
+def test_the_upper_bound_holds_when_document_lengths_vary_widely() -> None:
+    """The shortest document sets the bound, so a wide spread is the hard case."""
+    assert_bounds_hold(
+        {
+            1: "alpha",
+            2: " ".join(["alpha"] * 20),
+            3: " ".join(["alpha", *["beta"] * 40]),
+            4: "beta",
+        }
+    )
+
+
+def test_the_upper_bound_rises_with_the_frequency_it_is_given() -> None:
+    ranker = BM25Ranker(index_of(RANKING_CORPUS))
+    assert ranker.upper_bound("comput", 5) > ranker.upper_bound("comput", 1)
+
+
+def test_an_unindexed_term_bounds_nothing() -> None:
+    ranker = BM25Ranker(index_of(RANKING_CORPUS))
+    assert ranker.upper_bound("absent", 3) == 0.0
