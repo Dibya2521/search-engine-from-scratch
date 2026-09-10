@@ -36,6 +36,30 @@ named, so the claim can be re-checked rather than believed.
   the vocabulary and the document list but never the postings.
 - `docs/13-segments.md` and ADR 0005.
 - `benchmarks/segments.py`, measuring what a query costs as segments accumulate.
+- `search_engine.wand`, returning the best documents without scoring the rest.
+  Each query term is walked by a cursor carrying an upper bound on what that
+  term can contribute, and a document no combination of bounds can lift into the
+  results is skipped rather than scored. Exact, not approximate: it returns what
+  scoring every candidate returns, identifier for identifier and score for
+  score, which is checked against generated indexes and queries.
+- `BM25Ranker.upper_bound`, the most a term can contribute to any document,
+  computed from its highest frequency and the shortest document in the corpus.
+  Both are already stored, so the bound costs no postings read. It lives on the
+  scorer so that it stays derived from the same `k1` and `b` as the score.
+- `TopK` in `search_engine.ranking`, the same selection rule as `rank` for a
+  caller producing scores one at a time and needing the current threshold before
+  the last document has been seen.
+- `search_engine.cache`, a bounded cache that evicts the least recently used
+  entry and counts its hits and misses, used for parsed queries, decoded
+  postings and ranked results. A miss returns a marker rather than `None`, since
+  `None` is a value a caller may store and a cache that cannot tell the two
+  apart recomputes it silently and forever.
+- `CachedParser` in `search_engine.query`, which keeps the parses it has made.
+  `parse` stays pure and the cache lives on an object, so nothing is held at
+  module level and two callers can measure their own hit rates.
+- `docs/14-early-termination.md`, `docs/15-caching.md` and ADR 0006.
+- `benchmarks/early_termination.py`, comparing a full scan against both bound
+  granularities and measuring what the postings cache is worth.
 
 ### Changed
 
@@ -46,6 +70,21 @@ named, so the claim can be re-checked rather than believed.
   writer, which is the layer that can make an older copy invisible.
 - `SegmentReader` takes `cache=False`. A merge reads every term exactly once, so
   a cache holds everything it has already passed and buys nothing.
+- **The segment format is now version 2, and version 1 files are refused.** A
+  term's postings are an ordered sequence of blocks of 128 documents behind a
+  table giving each block's last document identifier, size, highest term
+  frequency and byte length, and delta encoding restarts at every block
+  boundary. The separate skip list is removed: block boundaries are the skip
+  points. **To upgrade, rebuild the index.** A version 1 file raises
+  `SegmentVersionError` naming the version it holds, the version this build
+  reads, and what to do, rather than being misread. The header is checked before
+  the checksum, so an old file is reported as old rather than as corrupt. The
+  reason for the change, and what it cost, are in ADR 0006.
+- **The postings cache is a bounded least-recently-used cache**, replacing a
+  dictionary that was emptied wholesale when it filled. `POSTINGS_CACHE_SIZE`
+  moved to `search_engine.cache` and rose from 1,024 to 10,000. A term the
+  segment does not hold now caches its empty result too, so a repeated query for
+  an unknown word costs one dictionary lookup rather than one per repeat.
 
 ### Measured
 
@@ -61,7 +100,36 @@ named, so the claim can be re-checked rather than believed.
   worse again, 6.9 MB against 842 kB, because the reader cached postings the
   merge reads once.
 
-Reproduce with `uv run python benchmarks/segments.py`.
+- **Early termination pays only under a condition, and the condition is
+  stated.** Over 50,000 documents it runs 7.0x faster than a full scan when one
+  query term is rare enough to drive the pivot, scoring 1,510 of 49,658
+  candidates, and 14.1x faster when only the single best document is wanted. It
+  runs **2.4x slower** when every query term is common, because nothing can be
+  pruned and the cursor machinery is added on top of the same scoring work, and
+  it loses on candidate sets of about a thousand. The code stays with the
+  condition recorded, exactly as `save_text` and the naive phrase matcher do.
+- **Per-block bounds cut documents scored from 50,000 to 138** on a corpus where
+  one document holds a term 500 times and the rest hold it once, running 10.7x
+  faster than a full scan. On a corpus whose document lengths are drawn
+  independently they prune almost nothing more than a single bound per term,
+  because a high frequency then lands in any block with equal probability and
+  every block maximum ends up near the term's own. They pay when high
+  frequencies are concentrated in few blocks.
+- **The postings cache is load-bearing, not an optimisation.** Scoring asks the
+  index for a term's postings once per document scored, so without the cache a
+  reader decodes the whole list on every call and scoring is quadratic rather
+  than linear in the candidates. Measured at 220x slower on 500 documents rising
+  to 3,598x on 4,000: a ratio that grows with the corpus rather than a constant
+  factor. Measuring it at 50,000 documents ran for 73.7 minutes at 94 percent of
+  a core and produced nothing before it was stopped, which is the result rather
+  than an obstacle to it.
+- **Cache hit rates of 99.8 to 100 percent** on a mix that repeats one term.
+  That characterises the benchmark and not production traffic, and it is
+  published because a cache whose hit rate nobody has measured is memory spent
+  on faith.
+
+Reproduce with `uv run python benchmarks/segments.py` and
+`uv run python benchmarks/early_termination.py`.
 
 ## [0.4.0] - 2026-09-08
 

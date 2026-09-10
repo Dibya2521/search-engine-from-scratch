@@ -78,6 +78,15 @@ postings must be streamed from disk in order, and that is what happened: the
 document identifiers sorted, precisely so it can be read in order. The two
 shapes coexist because they answer to different constraints.
 
+**Partly superseded for the on-disk form.** That reasoning still holds for this
+in-memory structure, which keeps its dictionary. It does not hold for a segment
+on disk, where [early termination](14-early-termination.md) needs to skip
+forward through a term's postings and to attach an upper bound to a range of
+them, and a dictionary can do neither. A segment now stores each term's postings
+as an ordered sequence of blocks. See
+[ADR 0006](adr/0006-document-ordered-postings.md) for the decision and what it
+cost.
+
 ### Positions are token positions, and one pipeline produces both sides
 
 The index calls the shared analysis function and numbers the terms it gets
@@ -206,3 +215,13 @@ identifiers.
   the 9.4x memory measurement above is why it matters. Document identifiers are
   stored separately there for the same reason they are tracked separately here:
   a document holding no terms appears in no postings list.
+- **[The on-disk index](12-on-disk-index.md)** holds the same information in a
+  file that is searched without being loaded, which is what makes the memory
+  figure above survivable. It stores each term's highest frequency and each
+  document's length alongside the postings, neither of which this structure
+  needs but both of which a bound does.
+- **[Segments](13-segments.md)** are many such files read as one index, with a
+  manifest deciding which exist. That is the form an index that grows actually
+  takes; this one is built in a single shot and never changes afterwards.
+- **[Early termination](14-early-termination.md)** is the reason the on-disk
+  postings are ordered and blocked rather than shaped like this mapping.
