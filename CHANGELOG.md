@@ -16,6 +16,18 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-10
+
+An index that can grow, survive a crash, and answer a query without scoring
+everything it holds.
+
+The index becomes many immutable files published by a manifest, so a document
+can be added without rebuilding the whole thing and a crash cannot lose one that
+was accepted. Ranking learns to stop early, which is worth several fold on some
+queries and costs on others; both are measured and both are stated. The segment
+format changed to make the second of those possible, so **an index built by
+0.4.0 must be rebuilt**.
+
 ### Added
 
 - `search_engine.writer`, which buffers documents and flushes them as immutable
@@ -408,7 +420,8 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.1.0...v0.2.0
