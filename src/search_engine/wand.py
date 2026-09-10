@@ -30,11 +30,22 @@ TF-IDF has no equivalent: its cosine normalisation divides by a per-document
 vector length that is not known until the document is chosen, so there is
 nothing to bound the contribution with in advance.
 
-A single segment is walked through its own skip pointers, so a cursor jumps
-without decoding the postings it passes over. Every other index is walked over
-the postings mapping it returns. A directory index is deliberately left on that
-path: it filters deleted documents inside `postings`, and reading the segment
-bytes underneath it would return documents a tombstone has removed.
+One bound for a whole term is loose. A term occurring fifty times in one
+document and once everywhere else carries a bound set by that single outlier, so
+almost nothing is pruned. A segment therefore stores a bound per block of
+postings, and the search sums the bounds of the blocks the cursors currently sit
+in. When that total cannot beat the threshold either, no document from here to
+the earliest block end can, and every cursor jumps past its block without the
+postings inside being read. The stop is held back to the next cursor's document,
+since a term that no cursor here bounds could contribute beyond that point.
+
+A single segment is walked through its block table, so a cursor jumps without
+decoding the postings it passes over. Every other index is walked over the
+postings mapping it returns and reports the term's own bound as its block bound,
+which the pivot rule guarantees is above the threshold, so the block test never
+fires there and nothing changes for it. A directory index is deliberately left
+on that path: it filters deleted documents inside `postings`, and reading the
+segment bytes underneath it would return documents a tombstone has removed.
 """
 
 from __future__ import annotations
@@ -44,7 +55,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from search_engine.ranking import TopK
-from search_engine.segment import SegmentReader, advance_to
+from search_engine.segment import (
+    SegmentReader,
+    block_identifiers,
+    read_blocks,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -52,7 +67,7 @@ if TYPE_CHECKING:
     from search_engine.bm25 import BM25Ranker
     from search_engine.codecs import Bytelike
     from search_engine.index import ReadableIndex
-    from search_engine.segment import TermEntry
+    from search_engine.segment import PostingsBlock
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +96,22 @@ class _Cursor:
         """Move to the first document at or after target, or past the end."""
         raise NotImplementedError
 
+    @property
+    def block_bound(self) -> float:
+        """Return the bound over the postings this cursor currently sits among.
+
+        A cursor with no blocks reports the whole term's bound. The pivot is
+        chosen so that the bounds up to it already exceed the threshold, so a
+        sum including this one can never fall to or below it, and such a cursor
+        is never asked for a block end.
+        """
+        return self.bound
+
+    @property
+    def block_end(self) -> int:
+        """Return the last document identifier of the current block."""
+        raise NotImplementedError
+
 
 class _MappingCursor(_Cursor):
     """A cursor over postings an index has already materialised."""
@@ -105,21 +136,56 @@ class _MappingCursor(_Cursor):
 class _SegmentCursor(_Cursor):
     """A cursor over a segment's postings, read straight from the mapped file.
 
-    Nothing is decoded but the document identifiers walked past, and the skip
-    list carries the walk over most of those.
+    Only the block table and the identifiers of the block currently under the
+    cursor are decoded. Positions are never touched, and a block the search
+    jumps over is never read at all.
     """
 
-    __slots__ = ("_data", "_entry")
+    __slots__ = ("_at", "_blocks", "_bounds", "_data", "_identifiers", "_position")
 
-    def __init__(self, bound: float, data: Bytelike, entry: TermEntry) -> None:
-        super().__init__(bound)
+    def __init__(
+        self, data: Bytelike, blocks: list[PostingsBlock], bounds: list[float]
+    ) -> None:
+        # A term's highest frequency is the highest any of its blocks holds, so
+        # the largest block bound is the bound for the term as a whole.
+        super().__init__(max(bounds))
         self._data = data
-        self._entry = entry
-        self.document = advance_to(data, entry, 0)
+        self._blocks = blocks
+        self._bounds = bounds
+        self._at = 0
+        self._identifiers: list[int] = []
+        self._position = 0
+        self._open(0)
+
+    @property
+    def block_bound(self) -> float:
+        """Return the bound over the block this cursor currently sits in."""
+        return self._bounds[self._at]
+
+    @property
+    def block_end(self) -> int:
+        """Return the last document identifier of the current block."""
+        return self._blocks[self._at].last_document
 
     def advance(self, target: int) -> None:
         """Move to the first document at or after target, or past the end."""
-        self.document = advance_to(self._data, self._entry, target)
+        at = self._at
+        while at < len(self._blocks) and self._blocks[at].last_document < target:
+            at += 1
+        if at == len(self._blocks):
+            self.document = None
+            return
+        if at != self._at:
+            self._open(at)
+        self._position = bisect_left(self._identifiers, target, self._position)
+        self.document = self._identifiers[self._position]
+
+    def _open(self, at: int) -> None:
+        """Decode one block's identifiers and sit on its first document."""
+        self._at = at
+        self._identifiers = block_identifiers(self._data, self._blocks[at])
+        self._position = 0
+        self.document = self._identifiers[0]
 
 
 def rank_wand(
@@ -172,7 +238,7 @@ def _step(
     weights: Mapping[str, float],
     results: TopK,
 ) -> bool:
-    """Score the pivot document, or move a cursor closer to it.
+    """Score the pivot document, jump over its blocks, or close the gap to it.
 
     Returns whether a document was scored. Only the cursors already positioned
     on the pivot document move past it: the rest have not reached it yet, and
@@ -182,11 +248,45 @@ def _step(
     if live[0][0] != target:
         live[0][1].advance(target)
         return False
+    holders = live[: _last_holder(live) + 1]
+    if sum(cursor.block_bound for _, cursor in holders) <= results.threshold:
+        _skip_blocks(live, holders)
+        return False
     results.push(target, ranker.score(weights, target))
     for document, cursor in live:
         if document == target:
             cursor.advance(target + 1)
     return True
+
+
+def _last_holder(live: Sequence[tuple[int, _Cursor]]) -> int:
+    """Return the index of the last cursor sitting on the first one's document.
+
+    Every cursor up to the pivot holds it, and a cursor past the pivot may hold
+    it too. Leaving one of those out would leave its term unbounded in a total
+    that decides whether the document can be skipped.
+    """
+    target = live[0][0]
+    at = 0
+    while at + 1 < len(live) and live[at + 1][0] == target:
+        at += 1
+    return at
+
+
+def _skip_blocks(
+    live: Sequence[tuple[int, _Cursor]], holders: Sequence[tuple[int, _Cursor]]
+) -> None:
+    """Move every cursor on the pivot document past the blocks it sits in.
+
+    The stop is the first document after the earliest of those blocks ends, held
+    back to the next cursor's document, because a term none of these cursors
+    bounds could contribute at or beyond it.
+    """
+    stops = [cursor.block_end + 1 for _, cursor in holders]
+    stops += [document for document, _ in live[len(holders) :]]
+    stop = min(stops)
+    for _, cursor in holders:
+        cursor.advance(stop)
 
 
 def _open_cursors(
@@ -207,8 +307,11 @@ def _open_cursor(index: ReadableIndex, ranker: BM25Ranker, term: str) -> _Cursor
         entry = index.dictionary.lookup(term)
         if entry is None:
             return None
-        bound = ranker.upper_bound(term, entry.max_term_frequency)
-        return _SegmentCursor(bound, index.raw, entry)
+        blocks = read_blocks(index.raw, entry)
+        bounds = [
+            ranker.upper_bound(term, block.max_term_frequency) for block in blocks
+        ]
+        return _SegmentCursor(index.raw, blocks, bounds)
     postings = index.postings(term)
     if not postings:
         return None

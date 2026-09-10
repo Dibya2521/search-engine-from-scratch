@@ -18,6 +18,7 @@ from hypothesis import strategies as st
 from search_engine.analysis import analyze
 from search_engine.bm25 import BM25Ranker
 from search_engine.directory import DirectoryIndex
+from search_engine.index import InvertedIndex
 from search_engine.segment import SegmentReader, write_segment
 from search_engine.wand import rank_wand, search_wand
 from search_engine.writer import IndexWriter
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from search_engine.index import InvertedIndex, ReadableIndex
+    from search_engine.index import ReadableIndex
 
 WORDS = ("alpha", "beta", "gamma", "delta", "epsilon")
 
@@ -194,3 +195,59 @@ def test_a_deleted_document_never_reaches_the_results(tmp_path: Path) -> None:
         assert_matches_full_scan(index, ranker, "alpha", 10)
         results = rank_wand(index, ranker, analyze("alpha"), 10)
     assert {document_id for document_id, _ in results} == {0, 1}
+
+
+def outlier_index(size: int, at: int, spike: int) -> InvertedIndex:
+    """One term everywhere, once per document except for one that repeats it.
+
+    Built through `from_postings` so the frequencies are exact rather than
+    whatever analysis would make of generated text.
+    """
+    postings = {
+        "alpha": {
+            document_id: list(range(spike if document_id == at else 1))
+            for document_id in range(size)
+        }
+    }
+    return InvertedIndex.from_postings(list(range(size)), postings)
+
+
+def test_block_bounds_skip_the_blocks_a_single_bound_cannot(tmp_path: Path) -> None:
+    """The case a bound for the whole term cannot handle.
+
+    One document holds the term 500 times and 4,999 hold it once. The term's
+    own bound is set by that one document, so it stays above every threshold
+    and prunes nothing. A bound per block prunes every block the outlier is not
+    in, leaving only the block it sits in to be scored.
+
+    Measured: 5,000 documents scored through the term bound, 129 through the
+    block bounds, and the same result from both.
+    """
+    index = outlier_index(5_000, 2_500, 500)
+    without_blocks = search_wand(index, BM25Ranker(index), ["alpha"], 1)
+    assert without_blocks.scored == 5_000
+
+    path = tmp_path / "outlier.seg"
+    write_segment(index, path)
+    with SegmentReader(path) as reader:
+        with_blocks = search_wand(reader, BM25Ranker(reader), ["alpha"], 1)
+    assert with_blocks.scored == 129
+    assert with_blocks.documents == without_blocks.documents
+
+
+def test_only_the_block_holding_the_outlier_is_scored(tmp_path: Path) -> None:
+    """Scoring stops at one document plus the block the outlier sits in.
+
+    The trailing block holds 8 of the 5,000 documents, so putting the outlier
+    there leaves 9 documents scored rather than 129. The count follows the
+    block the outlier lands in, not the size of the corpus.
+    """
+    index = outlier_index(5_000, 4_999, 500)
+    expected = search_wand(index, BM25Ranker(index), ["alpha"], 1)
+    path = tmp_path / "tail.seg"
+    write_segment(index, path)
+    with SegmentReader(path) as reader:
+        result = search_wand(reader, BM25Ranker(reader), ["alpha"], 1)
+    assert result.scored == 9
+    assert result.documents == expected.documents
+    assert [document_id for document_id, _ in result.documents] == [4_999]

@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING
 
 from corpus import fixed_length_corpus, make_vocabulary
 
-from search_engine.codecs import decode_at
 from search_engine.index import InvertedIndex
 from search_engine.persistence import load, save
 from search_engine.segment import (
@@ -39,8 +38,9 @@ from search_engine.segment import (
     TermDictionary,
     TermEntry,
     advance_to,
+    block_identifiers,
     decode_term_postings,
-    read_skips,
+    read_blocks,
     write_segment,
 )
 
@@ -207,10 +207,10 @@ def main() -> None:
 def measure_skipping(path: Path, terms: list[str]) -> None:
     """Compare finding one document against decoding the whole postings list.
 
-    This is the question skip pointers exist to answer: whether a term matches a
-    given document, which is what an intersection asks over and over. Decoding
+    This is the question a block table exists to answer: whether a term matches
+    a given document, which is what an intersection asks over and over. Decoding
     the list answers it too, and the comparison is only interesting on a list
-    long enough to carry a skip list at all.
+    long enough to span more than one block.
     """
     with SegmentReader(path) as reader:
         data = reader.raw
@@ -238,7 +238,7 @@ def measure_skipping(path: Path, terms: list[str]) -> None:
     print()
     print(
         f"| Term | Postings | Decode the list, {SKIP_PROBES} lookups s "
-        f"| Walk identifiers s | Use the skip list s | Skipping alone |"
+        f"| Walk identifiers s | Skip whole blocks s | Skipping alone |"
     )
     print("| --- | ---: | ---: | ---: | ---: | ---: |")
     for term, frequency, decoded, walked, skipped in rows:
@@ -275,23 +275,22 @@ def _find_by_skipping(data: memoryview, entry: TermEntry, targets: list[int]) ->
 
 
 def _find_by_walking(data: memoryview, entry: TermEntry, targets: list[int]) -> int:
-    """Walk the identifiers from the start, ignoring the skip list.
+    """Walk every block's identifiers, ignoring the table's last-identifier column.
 
     Isolates what skipping is worth. Without this column the comparison would
-    credit skip pointers for not decoding positions, which advance_to avoids
-    whether a skip list exists or not.
+    credit the block table for not decoding positions, which advance_to avoids
+    whether it skips a block or not.
     """
     found = 0
+    blocks = read_blocks(data, entry)
     for target in targets:
-        _, cursor = read_skips(data, entry.offset)
-        count, cursor = decode_at(data, cursor)
-        current = 0
-        for _ in range(count):
-            gap, cursor = decode_at(data, cursor)
-            current += gap
-            if current >= target:
-                break
-        found += current == target
+        walked = (
+            document_id
+            for block in blocks
+            for document_id in block_identifiers(data, block)
+            if document_id >= target
+        )
+        found += next(walked, None) == target
     return found
 
 

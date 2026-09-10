@@ -9,7 +9,7 @@ The file is laid out so that a reader can start at the end and work backwards:
 
     header       a magic string naming the format and its version
     fingerprint  the analysis configuration that produced the index
-    postings     one block per term, in sorted term order
+    postings     one section per term, in sorted term order, cut into blocks
     dictionary   the terms, front coded, in blocks of TERMS_PER_BLOCK
     block index  the first term of each block and where the block starts
     documents    the document identifiers, and each one's length in tokens
@@ -35,6 +35,20 @@ walking every posting of every term, which would read the whole file on the
 first query. Each term's highest frequency in any one document is stored
 because it gives an upper bound on that term's contribution to a score without
 reading its postings at all.
+
+A term's postings are cut into blocks of POSTINGS_BLOCK_SIZE documents, and a
+table ahead of them holds one row per block: the block's last document
+identifier, how many documents it holds, the highest term frequency inside it,
+and its length in bytes. The table is why this format has a second version. It
+makes a block reachable without decoding the blocks before it, because delta
+encoding restarts at every block boundary, and it gives a scorer a bound per
+block instead of one for the whole term. A single bound is set by the term's
+most extreme document, which is far too loose to prune with when that document
+is an outlier.
+
+Version 1 carried a separate skip list of isqrt(n) entries instead. Block
+boundaries answer the same question, so the skip list was removed rather than
+kept beside them, and version 1 files are refused rather than read.
 """
 
 from __future__ import annotations
@@ -42,9 +56,9 @@ from __future__ import annotations
 import io
 import mmap
 import zlib
+from bisect import bisect_left
 from dataclasses import dataclass
-from math import isqrt
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Final, NoReturn, Self
 
 from search_engine.analysis import fingerprint
 from search_engine.codecs import (
@@ -63,13 +77,15 @@ if TYPE_CHECKING:
 
     from search_engine.index import InvertedIndex
 
-SEGMENT_HEADER: Final = b"search-engine-segment v1\n"
+SEGMENT_MAGIC: Final = b"search-engine-segment v"
+SEGMENT_VERSION: Final = b"2"
+SEGMENT_HEADER: Final = SEGMENT_MAGIC + SEGMENT_VERSION + b"\n"
 
 TERMS_PER_BLOCK: Final = 16
 
-# Below this a postings list is short enough that walking it beats reading a
-# skip list first, so short lists pay nothing for the feature.
-SKIP_THRESHOLD: Final = 128
+# Lucene's default, and the same trade either way: larger blocks mean a smaller
+# table and looser per-block bounds, smaller blocks the reverse.
+POSTINGS_BLOCK_SIZE: Final = 128
 
 # Bounded so a long-running reader cannot grow without limit. Superseded by a
 # real cache, keyed by segment so it cannot go stale, in a later release.
@@ -87,6 +103,19 @@ class SegmentFormatError(ValueError):
 
 class SegmentCorruptError(SegmentFormatError):
     """Raised when a segment's checksum does not match its contents."""
+
+
+class SegmentVersionError(SegmentFormatError):
+    """Raised when a segment was written in a different version of the format."""
+
+    def __init__(self, stored: str, current: str) -> None:
+        """Name both versions, since the only way forward is to rebuild."""
+        super().__init__(
+            f"segment is format version {stored}, but this build reads "
+            f"version {current}: rebuild the index"
+        )
+        self.stored = stored
+        self.current = current
 
 
 class SegmentAnalyzerMismatchError(SegmentFormatError):
@@ -109,6 +138,17 @@ class TermEntry:
     length: int
     document_frequency: int
     max_term_frequency: int
+
+
+@dataclass(frozen=True, slots=True)
+class PostingsBlock:
+    """One block of a term's postings, and what is known without decoding it."""
+
+    last_document: int
+    document_count: int
+    max_term_frequency: int
+    offset: int
+    length: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,13 +191,13 @@ class SegmentBuilder:
 
     def add(self, term: str, postings: Mapping[int, Sequence[int]]) -> None:
         """Append one term's postings and record where they landed."""
-        block = _encode_term_postings(postings)
+        encoded = _encode_term_postings(postings)
         self._entries.append(
             (
                 term,
                 TermEntry(
                     offset=self._offset,
-                    length=len(block),
+                    length=len(encoded),
                     document_frequency=len(postings),
                     max_term_frequency=max(
                         len(positions) for positions in postings.values()
@@ -169,7 +209,7 @@ class SegmentBuilder:
             self._lengths[document_id] = self._lengths.get(document_id, 0) + len(
                 positions
             )
-        self._write(block)
+        self._write(encoded)
 
     def finish(self) -> None:
         """Write the dictionary, the documents and the footer."""
@@ -230,69 +270,105 @@ def _encode_prologue() -> bytes:
 
 
 def _encode_term_postings(postings: Mapping[int, Sequence[int]]) -> bytes:
-    """Encode one term's postings, with a skip list when the list is long enough.
-
-    The document identifiers are encoded exactly as the whole-file format
-    encodes them, so the two stay comparable and the same decoder reads both.
-    """
+    """Encode one term's postings as a table of blocks followed by the blocks."""
     ordered = sorted(postings)
-    identifiers, skips = _encode_identifiers(ordered)
-    parts = [skips, encode_number(len(ordered)), identifiers]
-    for document_id in ordered:
+    groups = [
+        ordered[at : at + POSTINGS_BLOCK_SIZE]
+        for at in range(0, len(ordered), POSTINGS_BLOCK_SIZE)
+    ]
+    payloads = [_encode_postings_block(group, postings) for group in groups]
+    return _encode_block_table(groups, payloads, postings) + b"".join(payloads)
+
+
+def _encode_block_table(
+    groups: Sequence[Sequence[int]],
+    payloads: Sequence[bytes],
+    postings: Mapping[int, Sequence[int]],
+) -> bytes:
+    """Encode one row per block: last identifier, size, highest frequency, bytes.
+
+    The last identifier is what makes the table a skip list. Without it a reader
+    would have to decode a block to find out whether the document it wants is
+    inside, which is the cost the table exists to remove.
+    """
+    parts = [encode_number(len(groups))]
+    previous = 0
+    for group, payload in zip(groups, payloads, strict=True):
+        parts.append(encode_number(group[-1] - previous))
+        parts.append(encode_number(len(group)))
+        parts.append(
+            encode_number(max(len(postings[document_id]) for document_id in group))
+        )
+        parts.append(encode_number(len(payload)))
+        previous = group[-1]
+    return b"".join(parts)
+
+
+def _encode_postings_block(
+    group: Sequence[int], postings: Mapping[int, Sequence[int]]
+) -> bytes:
+    """Encode one block's identifiers and then its positions.
+
+    Delta encoding restarts here rather than carrying on from the block before,
+    which is what lets a reader jump straight to this block.
+    """
+    parts = [encode_sorted(group)]
+    for document_id in group:
         positions = list(postings[document_id])
         parts.append(encode_number(len(positions)))
         parts.append(encode_sorted(positions))
     return b"".join(parts)
 
 
-def _encode_identifiers(ordered: Sequence[int]) -> tuple[bytes, bytes]:
-    """Return the delta-encoded identifiers and a skip list into them.
+def read_blocks(data: Bytelike, entry: TermEntry) -> list[PostingsBlock]:
+    """Return one term's block table, without decoding any postings.
 
-    A skip entry records a document identifier, the byte just past its gap, and
-    how many identifiers have been consumed by then, so a reader can resume
-    decoding from there and still know when to stop. There are isqrt(n) of
-    them, which balances scanning the skip list against scanning between skips:
-    both then cost O(sqrt(n)).
+    Raises:
+        SegmentFormatError: If the table is malformed.
     """
-    chunks: list[bytes] = []
-    ends: list[int] = []
-    previous = 0
-    running = 0
-    for document_id in ordered:
-        gap = encode_number(document_id - previous)
-        chunks.append(gap)
-        running += len(gap)
-        ends.append(running)
-        previous = document_id
-    identifiers = b"".join(chunks)
-    if len(ordered) < SKIP_THRESHOLD:
-        return identifiers, encode_number(0)
-    return identifiers, _encode_skips(ordered, ends)
+    try:
+        return _read_blocks(data, entry)
+    except CodecError as error:
+        message = f"segment postings are malformed: {error}"
+        raise SegmentFormatError(message) from error
 
 
-def _encode_skips(ordered: Sequence[int], ends: Sequence[int]) -> bytes:
-    count = isqrt(len(ordered))
-    interval = len(ordered) // count
-    positions = range(interval - 1, len(ordered) - 1, interval)
-    parts = [encode_number(len(positions))]
-    previous_id = 0
-    previous_end = 0
-    previous_at = -1
-    for at in positions:
-        parts.append(encode_number(ordered[at] - previous_id))
-        parts.append(encode_number(ends[at] - previous_end))
-        parts.append(encode_number(at - previous_at))
-        previous_id = ordered[at]
-        previous_end = ends[at]
-        previous_at = at
-    return b"".join(parts)
+def _read_blocks(data: Bytelike, entry: TermEntry) -> list[PostingsBlock]:
+    count, cursor = decode_at(data, entry.offset)
+    rows: list[tuple[int, int, int, int]] = []
+    last = 0
+    for _ in range(count):
+        gap, cursor = decode_at(data, cursor)
+        documents, cursor = decode_at(data, cursor)
+        highest, cursor = decode_at(data, cursor)
+        length, cursor = decode_at(data, cursor)
+        last += gap
+        rows.append((last, documents, highest, length))
+    return _locate_blocks(rows, cursor)
+
+
+def _locate_blocks(
+    rows: Sequence[tuple[int, int, int, int]], offset: int
+) -> list[PostingsBlock]:
+    """Give each table row the byte offset its payload starts at."""
+    blocks: list[PostingsBlock] = []
+    for last_document, documents, highest, length in rows:
+        blocks.append(PostingsBlock(last_document, documents, highest, offset, length))
+        offset += length
+    return blocks
+
+
+def block_identifiers(data: Bytelike, block: PostingsBlock) -> list[int]:
+    """Return one block's document identifiers, leaving its positions alone."""
+    identifiers, _ = decode_sorted_at(data, block.offset, block.document_count)
+    return identifiers
 
 
 def advance_to(data: Bytelike, entry: TermEntry, target: int) -> int | None:
     """Return the first document identifier at or after target, or None.
 
-    Uses the block's skip list to jump most of the way when it has one, and
-    walks from the start when it does not.
+    Skips whole blocks on the table's last-identifier column, then binary
+    searches inside the one block that can hold the answer.
 
     Raises:
         SegmentFormatError: If the postings are malformed.
@@ -305,62 +381,15 @@ def advance_to(data: Bytelike, entry: TermEntry, target: int) -> int | None:
 
 
 def _advance_to(data: Bytelike, entry: TermEntry, target: int) -> int | None:
-    skips, cursor = read_skips(data, entry.offset)
-    count, cursor = decode_at(data, cursor)
-    start = cursor
-    current, offset, consumed = _last_skip_at_or_before(skips, target)
-    if consumed and current >= target:
-        return current
-    cursor = start + offset
-    for _ in range(count - consumed):
-        gap, cursor = decode_at(data, cursor)
-        current += gap
-        if current >= target:
-            return current
+    for block in _read_blocks(data, entry):
+        if block.last_document >= target:
+            identifiers = block_identifiers(data, block)
+            return identifiers[bisect_left(identifiers, target)]
     return None
 
 
-def read_skips(data: Bytelike, offset: int) -> tuple[list[tuple[int, int, int]], int]:
-    """Return a postings block's skip entries and the offset just past them.
-
-    Each entry is a document identifier, the byte just past its gap, and how
-    many identifiers precede it. A block with no skip list yields an empty list.
-    """
-    count, cursor = decode_at(data, offset)
-    skips: list[tuple[int, int, int]] = []
-    document_id = 0
-    end = 0
-    at = -1
-    for _ in range(count):
-        gap, cursor = decode_at(data, cursor)
-        step, cursor = decode_at(data, cursor)
-        stride, cursor = decode_at(data, cursor)
-        document_id += gap
-        end += step
-        at += stride
-        skips.append((document_id, end, at + 1))
-    return skips, cursor
-
-
-def _last_skip_at_or_before(
-    skips: Sequence[tuple[int, int, int]], target: int
-) -> tuple[int, int, int]:
-    """Return the furthest skip that cannot have passed the target.
-
-    The third value is how many identifiers that skip has already consumed,
-    which is what tells the walk after it when to stop rather than reading on
-    into the positions that follow.
-    """
-    found = (0, 0, 0)
-    for entry in skips:
-        if entry[0] > target:
-            break
-        found = entry
-    return found
-
-
 def decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
-    """Decode one term's postings from the bytes its entry points at.
+    """Decode every block of one term's postings.
 
     Reads only the entry's own range, which is the property the whole format
     exists to provide.
@@ -376,9 +405,16 @@ def decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int
 
 
 def _decode_term_postings(data: Bytelike, entry: TermEntry) -> dict[int, list[int]]:
-    _, cursor = read_skips(data, entry.offset)
-    count, cursor = decode_at(data, cursor)
-    document_ids, cursor = decode_sorted_at(data, cursor, count)
+    postings: dict[int, list[int]] = {}
+    for block in _read_blocks(data, entry):
+        postings.update(_decode_postings_block(data, block))
+    return postings
+
+
+def _decode_postings_block(
+    data: Bytelike, block: PostingsBlock
+) -> dict[int, list[int]]:
+    document_ids, cursor = decode_sorted_at(data, block.offset, block.document_count)
     postings: dict[int, list[int]] = {}
     for document_id in document_ids:
         length, cursor = decode_at(data, cursor)
@@ -515,8 +551,7 @@ def read_footer(data: Bytelike, *, verify: bool = True) -> Footer:
             produced the file.
     """
     if data[: len(SEGMENT_HEADER)] != SEGMENT_HEADER:
-        message = "not a segment file: the header is missing"
-        raise SegmentFormatError(message)
+        _refuse_header(data)
     if len(data) < len(SEGMENT_HEADER) + FOOTER_SIZE:
         message = "segment file ends before its footer"
         raise SegmentFormatError(message)
@@ -533,6 +568,23 @@ def read_footer(data: Bytelike, *, verify: bool = True) -> Footer:
         for n in range(_FOOTER_FIELDS)
     ]
     return Footer(*fields)
+
+
+def _refuse_header(data: Bytelike) -> NoReturn:
+    """Refuse a file this reader cannot read, saying which of the two it is.
+
+    Raises:
+        SegmentVersionError: If it is a segment written in another version.
+        SegmentFormatError: If it is not a segment file at all.
+    """
+    if data[: len(SEGMENT_MAGIC)] != SEGMENT_MAGIC:
+        message = "not a segment file: the header is missing"
+        raise SegmentFormatError(message)
+    stored = bytes(data[len(SEGMENT_MAGIC) : len(SEGMENT_HEADER)])
+    raise SegmentVersionError(
+        stored.decode("ascii", errors="replace").strip(),
+        SEGMENT_VERSION.decode("ascii"),
+    )
 
 
 def stored_checksum(data: Bytelike) -> int:

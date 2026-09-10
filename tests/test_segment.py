@@ -5,7 +5,6 @@ from __future__ import annotations
 import zlib
 from bisect import bisect_left
 from dataclasses import replace
-from math import isqrt
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,27 +12,30 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from search_engine.analysis import fingerprint
-from search_engine.codecs import decode_at, encode_number, encode_sorted
+from search_engine.codecs import encode_number, encode_sorted
 from search_engine.index import InvertedIndex
 from search_engine.segment import (
     FOOTER_SIZE,
+    POSTINGS_BLOCK_SIZE,
     POSTINGS_CACHE_SIZE,
     SEGMENT_HEADER,
-    SKIP_THRESHOLD,
+    SEGMENT_MAGIC,
     TERMS_PER_BLOCK,
     Footer,
     SegmentAnalyzerMismatchError,
     SegmentCorruptError,
     SegmentFormatError,
     SegmentReader,
+    SegmentVersionError,
     TermDictionary,
     TermEntry,
     advance_to,
+    block_identifiers,
     decode_documents,
     decode_term_postings,
     encode_segment,
+    read_blocks,
     read_footer,
-    read_skips,
     write_segment,
 )
 
@@ -472,38 +474,86 @@ def entry_for(data: bytes, term: str) -> TermEntry:
     return entry
 
 
-def test_identifiers_are_encoded_exactly_as_the_whole_file_format_does() -> None:
-    """The skip list is a prefix, so the identifiers themselves must not move."""
+def test_a_block_starts_with_identifiers_the_whole_file_format_would_write() -> None:
+    """A block begins at its own identifiers, so the two encodings stay the same."""
     ordered = [1, 4, 9, 300, 70_000]
     data = encode_segment(postings_index(ordered))
     entry = entry_for(data, "t")
-    skips, cursor = read_skips(data, entry.offset)
-    assert skips == []
-    count, cursor = decode_at(data, cursor)
-    assert count == len(ordered)
+    block = read_blocks(data, entry)[0]
     expected = encode_sorted(ordered)
-    assert bytes(data[cursor : cursor + len(expected)]) == expected
+    assert bytes(data[block.offset : block.offset + len(expected)]) == expected
 
 
-def test_a_short_postings_list_carries_no_skip_list() -> None:
-    ordered = list(range(SKIP_THRESHOLD - 1))
-    data = encode_segment(postings_index(ordered))
-    skips, _ = read_skips(data, entry_for(data, "t").offset)
-    assert skips == []
+def test_a_short_postings_list_is_a_single_block() -> None:
+    ordered = list(range(POSTINGS_BLOCK_SIZE - 1))
+    blocks = read_blocks(*_term(ordered))
+    assert len(blocks) == 1
+    assert blocks[0].document_count == len(ordered)
+    assert blocks[0].last_document == ordered[-1]
 
 
-def test_a_long_postings_list_carries_the_expected_number_of_skips() -> None:
+def test_a_long_postings_list_is_cut_at_the_block_size() -> None:
     ordered = list(range(0, 4_000, 2))
-    data = encode_segment(postings_index(ordered))
-    skips, _ = read_skips(data, entry_for(data, "t").offset)
-    assert len(skips) == len(ordered) // isqrt(len(ordered)) - 1 or skips
-    assert all(document_id in ordered for document_id, _, _ in skips)
-    assert [consumed for _, _, consumed in skips] == sorted(
-        consumed for _, _, consumed in skips
+    blocks = read_blocks(*_term(ordered))
+    assert len(blocks) == -(-len(ordered) // POSTINGS_BLOCK_SIZE)
+    assert [block.document_count for block in blocks[:-1]] == [POSTINGS_BLOCK_SIZE] * (
+        len(blocks) - 1
+    )
+    assert sum(block.document_count for block in blocks) == len(ordered)
+    assert [block.last_document for block in blocks] == sorted(
+        block.last_document for block in blocks
     )
 
 
-@pytest.mark.parametrize("count", [10, SKIP_THRESHOLD, 1_000])
+def test_every_block_reports_the_identifiers_it_holds() -> None:
+    """The table is only a skip list if its last identifier is the real one."""
+    ordered = list(range(0, 1_000, 3))
+    data, entry = _term(ordered)
+    seen: list[int] = []
+    for block in read_blocks(data, entry):
+        identifiers = block_identifiers(data, block)
+        assert len(identifiers) == block.document_count
+        assert identifiers[-1] == block.last_document
+        seen += identifiers
+    assert seen == ordered
+
+
+def test_block_maxima_match_the_postings_inside_each_block() -> None:
+    """The bound a scorer prunes with is wrong if this is wrong."""
+    postings = {
+        "t": {
+            document_id: list(range(1 + (document_id % 7)))
+            for document_id in range(500)
+        }
+    }
+    index = InvertedIndex.from_postings(list(range(500)), postings)
+    data = encode_segment(index)
+    entry = entry_for(data, "t")
+    decoded = decode_term_postings(data, entry)
+    blocks = read_blocks(data, entry)
+    assert len(blocks) > 1
+    for block in blocks:
+        inside = block_identifiers(data, block)
+        assert block.max_term_frequency == max(len(decoded[at]) for at in inside)
+    assert entry.max_term_frequency == max(block.max_term_frequency for block in blocks)
+
+
+def test_the_block_table_and_its_blocks_fill_the_term_exactly() -> None:
+    """A byte unaccounted for here is a byte the next term would misread."""
+    ordered = list(range(0, 900, 2))
+    data, entry = _term(ordered)
+    blocks = read_blocks(data, entry)
+    table = blocks[0].offset - entry.offset
+    assert table + sum(block.length for block in blocks) == entry.length
+
+
+def _term(ordered: list[int]) -> tuple[bytes, TermEntry]:
+    """Return a segment holding one term with these identifiers, and its entry."""
+    data = encode_segment(postings_index(ordered))
+    return data, entry_for(data, "t")
+
+
+@pytest.mark.parametrize("count", [10, POSTINGS_BLOCK_SIZE, 1_000])
 def test_advance_to_agrees_with_a_linear_search(count: int) -> None:
     ordered = [number * 3 for number in range(count)]
     data = encode_segment(postings_index(ordered))
@@ -528,11 +578,11 @@ def test_advance_to_on_malformed_postings_is_refused() -> None:
 
 
 def test_dense_and_sparse_identifiers_both_skip_correctly() -> None:
-    """Fixed-interval skips assume even byte spacing, and sparse gaps break that.
+    """A block holds a fixed count of documents, not a fixed number of bytes.
 
     Dense identifiers encode to one byte each and identifiers spaced beyond
-    2 ** 28 to five, so the same number of skips covers very different byte
-    distances.
+    2 ** 28 to five, so blocks of the same size cover very different byte
+    distances. Only the stored length keeps a reader in step with them.
     """
     for ordered in (
         list(range(1_000)),
@@ -571,3 +621,26 @@ def test_a_reader_exposes_its_buffer_and_dictionary(tmp_path: Path) -> None:
         assert entry is not None
         assert decode_term_postings(reader.raw, entry) == {0: [0]}
         assert len(reader.raw) == (tmp_path / "a.seg").stat().st_size
+
+
+def test_a_segment_from_another_format_version_is_refused() -> None:
+    """The postings layout changed, so an older file cannot simply be read.
+
+    The header is checked before the checksum, so the version is reported
+    rather than the corruption that patching the header also causes.
+    """
+    data = bytearray(encode_segment(index_of("alpha beta")))
+    data[len(SEGMENT_MAGIC)] = ord("1")
+    with pytest.raises(SegmentVersionError, match="rebuild the index") as caught:
+        read_footer(bytes(data))
+    assert caught.value.stored == "1"
+    assert caught.value.current == "2"
+    assert "version 1" in str(caught.value)
+    assert "version 2" in str(caught.value)
+
+
+def test_a_malformed_block_table_is_refused() -> None:
+    data = encode_segment(postings_index([1, 2, 3]))
+    broken = TermEntry(len(data), 4, 1, 1)
+    with pytest.raises(SegmentFormatError, match="postings are malformed"):
+        read_blocks(data, broken)
