@@ -61,6 +61,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, NoReturn, Self
 
 from search_engine.analysis import fingerprint
+from search_engine.cache import MISSING, POSTINGS_CACHE_SIZE, LruCache
 from search_engine.codecs import (
     Bytelike,
     CodecError,
@@ -86,10 +87,6 @@ TERMS_PER_BLOCK: Final = 16
 # Lucene's default, and the same trade either way: larger blocks mean a smaller
 # table and looser per-block bounds, smaller blocks the reverse.
 POSTINGS_BLOCK_SIZE: Final = 128
-
-# Bounded so a long-running reader cannot grow without limit. Superseded by a
-# real cache, keyed by segment so it cannot go stale, in a later release.
-POSTINGS_CACHE_SIZE: Final = 1024
 
 _FOOTER_FIELDS: Final = 8
 _FIELD_BYTES: Final = 8
@@ -793,8 +790,9 @@ class SegmentReader:
             raise
         self._document_ids = ids
         self._lengths = dict(zip(ids, lengths, strict=True))
-        self._caching = cache
-        self._cache: dict[str, dict[int, list[int]]] = {}
+        self._cache: LruCache[str, dict[int, list[int]]] | None = (
+            LruCache(POSTINGS_CACHE_SIZE) if cache else None
+        )
 
     def close(self) -> None:
         """Release the mapping and the file. Safe to call more than once."""
@@ -821,21 +819,26 @@ class SegmentReader:
         verify_checksum(self._view)
 
     def postings(self, term: str) -> Mapping[int, Sequence[int]]:
-        """Return the documents containing a term, and where in each it occurs."""
+        """Return the documents containing a term, and where in each it occurs.
+
+        A term nobody holds caches its empty result too, so a query for a word
+        the segment does not have pays one dictionary lookup rather than one
+        per repeat.
+        """
+        if self._cache is None:
+            return self._decode(term)
         cached = self._cache.get(term)
-        if cached is not None:
+        if cached is not MISSING:
             return cached
+        decoded = self._decode(term)
+        self._cache.put(term, decoded)
+        return decoded
+
+    def _decode(self, term: str) -> dict[int, list[int]]:
         entry = self._dictionary.lookup(term)
         if entry is None:
             return {}
-        decoded = decode_term_postings(self._view, entry)
-        if not self._caching:
-            return decoded
-        if len(self._cache) >= POSTINGS_CACHE_SIZE:
-            # Replaced by the real cache, keyed by segment, in a later release.
-            self._cache.clear()
-        self._cache[term] = decoded
-        return decoded
+        return decode_term_postings(self._view, entry)
 
     def document_frequency(self, term: str) -> int:
         """Return how many documents contain a term."""
@@ -878,6 +881,15 @@ class SegmentReader:
     def document_ids(self) -> Iterable[int]:
         """Return every document identifier, in ascending order."""
         return tuple(self._document_ids)
+
+    @property
+    def postings_cache(self) -> LruCache[str, dict[int, list[int]]] | None:
+        """Return the postings cache, or None when this reader caches nothing.
+
+        Exposed so a benchmark can publish the hit rate. A cache whose hit rate
+        nobody has measured is memory spent on faith.
+        """
+        return self._cache
 
     @property
     def raw(self) -> memoryview:

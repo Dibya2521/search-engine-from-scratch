@@ -12,6 +12,12 @@ something scores them, so a set is the honest return type.
 
 Query text goes through the same analysis as documents. It has to: a query
 analyzed differently would ask for terms the index never stored.
+
+Parsing is pure, so `CachedParser` can keep a parse for the life of the process
+without any way for it to go stale. It is a class rather than a cache inside
+`parse` so that nothing here holds mutable state at module level: two callers
+can measure their own hit rates, and a test never inherits what an earlier test
+parsed.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from search_engine.analysis import analyze_positioned
+from search_engine.cache import MISSING, QUERY_CACHE_SIZE, LruCache
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -132,3 +139,41 @@ def execute(index: ReadableIndex, query: Query) -> set[int]:
 def search(index: ReadableIndex, text: str) -> set[int]:
     """Parse and run query text in one step."""
     return execute(index, parse(text))
+
+
+class CachedParser:
+    """Parses query text, keeping the parses it has already made.
+
+    A parsed query is immutable, so handing the same one to two callers is
+    safe, and parsing is pure, so a kept parse can never be wrong. Together
+    those are the whole argument for this cache: there is no state to
+    invalidate and no way for a hit to be stale.
+    """
+
+    __slots__ = ("_cache",)
+
+    def __init__(self, capacity: int = QUERY_CACHE_SIZE) -> None:
+        """Keep at most `capacity` parses.
+
+        Raises:
+            ValueError: If capacity is not positive.
+        """
+        self._cache: LruCache[str, Query] = LruCache(capacity)
+
+    def parse(self, text: str) -> Query:
+        """Return the parse of this text, from the cache when it is held."""
+        cached = self._cache.get(text)
+        if cached is not MISSING:
+            return cached
+        parsed = parse(text)
+        self._cache.put(text, parsed)
+        return parsed
+
+    def search(self, index: ReadableIndex, text: str) -> set[int]:
+        """Run query text, reusing an earlier parse of the same text."""
+        return execute(index, self.parse(text))
+
+    @property
+    def cache(self) -> LruCache[str, Query]:
+        """Return the cache, so a caller can read its hit rate."""
+        return self._cache

@@ -30,6 +30,7 @@ figure reported for it is lower than the work a real query would do.
 from __future__ import annotations
 
 import time
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
@@ -49,6 +50,11 @@ VOCABULARY_SIZE = 4_000
 REPEATS = 7
 LIMIT = 10
 OUTLIER_FREQUENCY = 500
+
+# Scoring without the postings cache is quadratic, so the cache comparison runs
+# on corpora small enough to finish. 50,000 documents would take days.
+CACHE_SIZES = (500, 1_000, 2_000, 4_000)
+CACHE_VOCABULARY = 1_000
 
 
 class TermBounds:
@@ -182,23 +188,34 @@ def report(
     mixes: list[tuple[str, list[str]]],
 ) -> None:
     """Print one table of every query mix at one result limit."""
-    print()
-    print(f"### Limit {limit}")
-    print()
-    print(
+    say()
+    say(f"### Limit {limit}")
+    say()
+    say(
         "| Query | Terms | Candidates | Scan s | Term bounds s | Block bounds s "
         "| Scored, term bounds | Scored, block bounds | Block bounds, share |"
     )
-    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    say("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for name, terms in mixes:
         scan, by_term, by_block, candidates, term_scored, block_scored = measure(
             reader, ranker, terms, limit
         )
         share = block_scored / candidates if candidates else 0.0
-        print(
+        say(
             f"| {name} | {len(terms)} | {candidates:,} | {scan:.4f} | {by_term:.4f} "
             f"| {by_block:.4f} | {term_scored:,} | {block_scored:,} | {share:.1%} |"
         )
+
+
+def say(line: str = "") -> None:
+    """Print a line and flush it.
+
+    This benchmark builds a 50,000 document corpus and runs for minutes. Python
+    block-buffers stdout when it is not a terminal, so without the flush a run
+    redirected to a file shows nothing at all until it exits, and there is no
+    way to tell progress from a hang.
+    """
+    print(line, flush=True)
 
 
 def _time(work: Callable[[], object]) -> float:
@@ -211,15 +228,81 @@ def _time(work: Callable[[], object]) -> float:
     return best
 
 
+def _time_once(work: Callable[[], object]) -> float:
+    """Return one run, for a side too slow to run seven times."""
+    start = time.perf_counter()
+    work()
+    return time.perf_counter() - start
+
+
+def _search_common(reader: SegmentReader, ranker: BM25Ranker, term: str) -> None:
+    """Run the query the cache comparison repeats."""
+    search_wand(reader, ranker, [term], LIMIT)
+
+
+def measure_caching(directory: Path) -> None:
+    """Time the same query with the postings cache on and off, as size grows.
+
+    **The postings cache is not an optimisation, it is load-bearing.**
+    `BM25Ranker.score` asks the index for a term's postings once per document
+    scored, and a reader with no cache decodes the whole list on every one of
+    those calls. Scoring is therefore linear in the candidates with the cache
+    and quadratic without it, which the growth of the ratio below shows.
+
+    That is why this runs on corpora far smaller than the tables above. At
+    50,000 candidates the uncached side needs billions of posting decodes and
+    does not finish in any useful time, and that failure is the result rather
+    than an obstacle to it.
+
+    Timings here are single runs, not best of seven, because the difference is
+    orders of magnitude rather than percent and seven runs of the uncached side
+    would take many minutes.
+    """
+    say()
+    say("### The postings cache, on and off, as the corpus grows")
+    say()
+    say("| Documents | Candidates | Cache on s | Cache off s | Off / on | Hit rate |")
+    say("| ---: | ---: | ---: | ---: | ---: | ---: |")
+    vocabulary = make_vocabulary(CACHE_VOCABULARY)
+    for count in CACHE_SIZES:
+        index = InvertedIndex()
+        for document_id, document in enumerate(varied_length_corpus(count, vocabulary)):
+            index.add_document(document_id, document)
+        path = directory / f"cache{count}.seg"
+        write_segment(index, path)
+        say(_cache_row(path, count))
+
+
+def _cache_row(path: Path, count: int) -> str:
+    """Return one row of the cache table, both sides over the same segment."""
+    timings: dict[bool, float] = {}
+    candidates = 0
+    rate = "n/a"
+    for caching in (True, False):
+        with SegmentReader(path, verify=False, cache=caching) as reader:
+            ranker = BM25Ranker(reader)
+            term = max(reader.terms, key=reader.document_frequency)
+            candidates = reader.document_frequency(term)
+            timings[caching] = _time_once(partial(_search_common, reader, ranker, term))
+            cache = reader.postings_cache
+            if cache is not None:
+                rate = f"{cache.hit_rate:.1%}"
+    ratio = timings[False] / timings[True] if timings[True] else float("inf")
+    return (
+        f"| {count:,} | {candidates:,} | {timings[True]:.4f} | {timings[False]:.4f} "
+        f"| {ratio:,.0f}x | {rate} |"
+    )
+
+
 def measure_corpus(index: InvertedIndex, directory: Path, name: str) -> None:
     """Write one index as a segment and report every mix at two limits."""
     path = directory / f"{name}.seg"
     write_segment(index, path)
-    print(f"segment MB     : {path.stat().st_size / 1_000_000:.2f}")
+    say(f"segment MB     : {path.stat().st_size / 1_000_000:.2f}")
     with SegmentReader(path, verify=False) as reader:
         ranker = BM25Ranker(reader)
         highest = max(reader.terms, key=reader.document_frequency)
-        print(
+        say(
             f"most common    : {highest} in "
             f"{reader.document_frequency(highest):,} of "
             f"{reader.document_count:,} documents"
@@ -235,15 +318,18 @@ def main() -> None:
     """Measure the generated corpus, then the shape block bounds need."""
     with TemporaryDirectory() as directory:
         root = Path(directory)
-        print("## A generated corpus, lengths spread over two orders of magnitude")
+        say("## A generated corpus, lengths spread over two orders of magnitude")
         index = build()
-        print(f"documents      : {index.document_count:,}")
-        print(f"distinct terms : {index.vocabulary_size:,}")
+        say(f"documents      : {index.document_count:,}")
+        say(f"distinct terms : {index.vocabulary_size:,}")
         measure_corpus(index, root, "generated")
         del index
-        print()
-        print("## One document holding the term 500 times, the rest holding it once")
+        say()
+        say("## One document holding the term 500 times, the rest holding it once")
         measure_corpus(outlier_index(), root, "outlier")
+        say()
+        say("## What the postings cache is worth")
+        measure_caching(root)
 
 
 if __name__ == "__main__":

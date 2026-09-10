@@ -12,12 +12,12 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from search_engine.analysis import fingerprint
+from search_engine.cache import POSTINGS_CACHE_SIZE
 from search_engine.codecs import encode_number, encode_sorted
 from search_engine.index import InvertedIndex
 from search_engine.segment import (
     FOOTER_SIZE,
     POSTINGS_BLOCK_SIZE,
-    POSTINGS_CACHE_SIZE,
     SEGMENT_HEADER,
     SEGMENT_MAGIC,
     TERMS_PER_BLOCK,
@@ -362,12 +362,34 @@ def test_postings_are_cached_after_the_first_read(tmp_path: Path) -> None:
         assert reader.postings("alpha") is reader.postings("alpha")
 
 
-def test_the_cache_is_bounded(tmp_path: Path) -> None:
-    terms = [f"t{number:05d}" for number in range(POSTINGS_CACHE_SIZE + 10)]
-    with SegmentReader(write(index_of_terms(terms), tmp_path / "a.seg")) as reader:
-        for term in terms:
-            assert reader.postings(term)
-        assert len(reader.postings(terms[-1])) == 1
+def test_the_cache_is_bounded_and_counted(tmp_path: Path) -> None:
+    """The reader holds the bounded cache, not a dictionary that only grows."""
+    with SegmentReader(write(index_of("alpha beta"), tmp_path / "a.seg")) as reader:
+        cache = reader.postings_cache
+        assert cache is not None
+        assert cache.capacity == POSTINGS_CACHE_SIZE
+        reader.postings("alpha")
+        reader.postings("alpha")
+        assert (cache.hits, cache.misses) == (1, 1)
+
+
+def test_a_reader_opened_without_a_cache_holds_none(tmp_path: Path) -> None:
+    """A merge reads every term once, so caching would retain what it passed."""
+    path = write(index_of("alpha beta"), tmp_path / "a.seg")
+    with SegmentReader(path, cache=False) as reader:
+        assert reader.postings_cache is None
+        assert reader.postings("alpha") == {0: [0]}
+        assert reader.postings("alpha") is not reader.postings("alpha")
+
+
+def test_a_term_the_segment_lacks_is_cached_as_empty(tmp_path: Path) -> None:
+    """Otherwise every repeat of a query for an unknown word costs a lookup."""
+    with SegmentReader(write(index_of("alpha"), tmp_path / "a.seg")) as reader:
+        assert reader.postings("absent") == {}
+        assert reader.postings("absent") == {}
+        cache = reader.postings_cache
+        assert cache is not None
+        assert cache.hits == 1
 
 
 def test_document_lengths_and_frequencies_come_from_the_dictionary(
