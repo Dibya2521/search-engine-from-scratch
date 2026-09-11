@@ -113,10 +113,15 @@ def test_with_no_stopwords_every_token_survives_at_its_own_position(
 
 @given(st.text())
 def test_every_surviving_position_points_at_its_own_token(text: str) -> None:
-    """Ties each emitted term back to the exact token it came from."""
+    """Ties each emitted term back to the exact token it came from.
+
+    A term is its token stemmed when the token is ASCII and its token unchanged
+    otherwise, and never anything else, whatever the script.
+    """
     tokens = tokenize(text)
     for position, term in analyze_positioned(text):
-        assert term == stem(tokens[position])
+        token = tokens[position]
+        assert term == (stem(token) if token.isascii() else token)
 
 
 @given(st.text())
@@ -185,7 +190,34 @@ def test_an_index_built_before_normalization_is_refused(
 
 
 def test_analysis_carries_the_form_through_to_the_terms() -> None:
-    """A ligature is dropped whole under NFC and recovered under NFKC."""
+    """One case showing normalization and the stemming guard at once.
+
+    Under NFC the ligature survives, so the token is not ASCII and is left
+    unstemmed. Under NFKC it folds to ``fi``, the token becomes ASCII, and the
+    English stemmer then applies.
+    """
     text = f"{chr(0xFB01)}refighting"
-    assert analyze(text) == ["refight"]
+    assert analyze(text) == [f"{chr(0xFB01)}refighting"]
     assert analyze(text, form="NFKC") == ["firefight"]
+
+
+@pytest.mark.parametrize(
+    ("script", "text"),
+    [
+        ("greek", "".join(chr(point) for point in (0x395, 0x3BB, 0x3BB, 0x3AC))),
+        ("cyrillic", "".join(chr(point) for point in (0x41F, 0x440, 0x438))),
+        ("arabic", "".join(chr(point) for point in (0x645, 0x631, 0x62D))),
+    ],
+)
+def test_a_token_outside_ascii_is_never_stemmed(script: str, text: str) -> None:
+    """The stemmer encodes English suffix rules and has no meaning elsewhere.
+
+    Leaving a token whole costs recall on inflected forms. Stripping letters
+    that spell nothing in that script costs correctness, which is worse.
+    """
+    assert analyze(text, NO_STOPWORDS) == [text.lower()], script
+
+
+def test_ascii_tokens_are_still_stemmed() -> None:
+    """The guard must not have switched stemming off for the language it fits."""
+    assert analyze("running searches") == ["run", "search"]

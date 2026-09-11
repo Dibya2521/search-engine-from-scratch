@@ -18,9 +18,12 @@ that two spellings of the same word become the same string.
 
 The rule used here:
 
-1. Lowercase the text.
-2. A token is a maximal run of `[a-z0-9]`.
-3. Every other character is a separator and is discarded.
+1. Normalize the text to a canonical Unicode form.
+2. Lowercase it.
+3. A token is a maximal run of word characters, excluding the underscore.
+4. Every other character is a separator and is discarded.
+5. A run of characters from a script written without spaces is then cut into
+   overlapping pairs.
 
 Implemented at [`src/search_engine/tokenizer.py`](../src/search_engine/tokenizer.py).
 
@@ -59,14 +62,33 @@ fixes both with one rule.
 ## How it works, the internals
 
 ```python
-_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+TOKEN_PATTERN = re.compile(r"[^\W_]+")
 
 
-def tokenize(text: str) -> list[str]:
-    return [match.group() for match in _TOKEN_PATTERN.finditer(text.lower())]
+def tokenize(text: str, form: NormalForm = DEFAULT_FORM) -> list[str]:
+    normalized = unicodedata.normalize(form, text).lower()
+    return [
+        token
+        for match in TOKEN_PATTERN.finditer(normalized)
+        for token in _segment(match.group())
+    ]
 ```
 
-Three mechanisms, in order.
+Four mechanisms, in order.
+
+### Normalization
+
+One word can be written as more than one sequence of code points. `café` with a
+composed acute accent is a single code point; the same word with a combining
+accent is an ASCII `e` followed by a mark. They render identically and used to
+produce different tokens, so a document stored in one form could never match a
+query typed in the other.
+
+`NFC` composes them, and is the default. `NFKC` also folds compatibility forms,
+recovering tokens that would otherwise be dropped and destroying distinctions in
+the same breath: it turns a ligature into two letters, and a superscript two
+into an ordinary two. NFC is the default because it only ever merges spellings
+that render identically, so it cannot lose a distinction a reader can see.
 
 ### `text.lower()`
 
@@ -94,15 +116,27 @@ So the ASCII filter cannot be hoisted before lowercasing as an optimisation.
 The order is mandatory: lowercase first, filter second. Reversing them drops
 tokens.
 
-### The pattern `[a-z0-9]+`
+### The pattern `[^\W_]+`
 
-`[a-z0-9]` matches one code point in either of two ranges. `+` makes it
-one-or-more, and the engine is greedy, so at each start position it consumes the
-longest available run. That greediness is what produces *maximal* runs, and why
-`a1b2c3` is one token rather than six.
+`\W` is any character that is not a word character, so `[^\W_]` is a word
+character that is not an underscore. Python matches `\w` against Unicode by
+default for `str` patterns, so this covers every alphabet and every set of
+digits, not just Latin ones. The underscore is excluded because it is a
+separator here like every other punctuation mark, which is why
+`snake_case_name` is three tokens.
 
-The pattern has no alternation, no backreferences and no nested quantifiers, so
-there is nothing to backtrack over. Each character is examined at most twice,
+`+` makes it one-or-more, and the engine is greedy, so at each start position it
+consumes the longest available run. That greediness is what produces *maximal*
+runs, and why `a1b2c3` is one token rather than six.
+
+**The pattern was `[a-z0-9]+` until version 0.6.0**, which produced *zero*
+tokens for Chinese, Japanese, Korean, Greek, Cyrillic, Hebrew and Arabic. Those
+documents were not degraded, they were unsearchable, and no amount of better
+ranking fixes a ceiling set this far upstream.
+
+The pattern still has no alternation, no backreferences and no nested
+quantifiers, so there is nothing to backtrack over. **Any replacement must keep
+that property**, and a comment in the source says so. Each character is examined at most twice,
 giving **O(n) time in the length of the text** with no pathological input. That
 matters for a component that will process attacker-supplied query strings: a
 carelessly written equivalent such as `([a-z]+)+` is exponential on the same
@@ -114,6 +148,32 @@ the index, the intersection algorithms, TF-IDF. A character-class scan is
 general string processing whose mechanism is fully described above, and
 hand-writing the equivalent character loop would teach nothing about
 information retrieval while running slower.
+
+### Bigrams for scripts written without spaces
+
+Chinese and Japanese put no spaces between words, so a run of them arrives as a
+single enormous match. Splitting it properly needs a dictionary and a
+segmentation model, which is a different project. Overlapping character bigrams
+are the standard cheap answer and what Lucene's CJK analyser does:
+
+```text
+東京大学  ->  [東京, 京大, 大学]
+```
+
+Four characters give three tokens; one character stays one token. They overlap
+rather than partition, because partitioning would miss any word straddling a
+pair boundary.
+
+Three costs, all real:
+
+1. Roughly twice the postings for text in those scripts.
+2. False matches across word boundaries, so precision falls.
+3. Recall goes from zero to imperfect. **That is the whole of the value here**,
+   and it is worth saying plainly rather than dressing up.
+
+A run holding both kinds is cut at the change of script, so a product name with
+Latin and Japanese in it gives whole words for one half and bigrams for the
+other.
 
 ### `finditer` rather than `findall`
 
@@ -144,7 +204,10 @@ positions later need to account for removed stopwords, only the indexer changes.
 
 ## When this rule is the right choice
 
-Conditions under which `[a-z0-9]+` on lowercased text is genuinely correct:
+### Conditions under which this rule is genuinely correct
+
+The original ASCII-only rule was correct under these conditions, and the list is
+kept because it is what the widened pattern had to escape:
 
 - The corpus is English, or close enough that losing accented forms is
   tolerable.
@@ -170,22 +233,23 @@ Under those conditions this rule is the right one.
 
 Each row is real output, produced before any assertion was written.
 
-| Input | Tokens | Why |
-| --- | --- | --- |
-| `café` composed | `["caf"]` | `é` is one code point, filtered out entirely |
-| `café` decomposed | `["cafe"]` | `e` is ASCII, only the combining mark is filtered |
-| `naïve` composed | `["na", "ve"]` | word split in two |
-| `Müller` composed | `["m", "ller"]` | word split in two |
-| `Straße` | `["stra", "e"]` | sharp s filtered |
-| `ﬁre` (fi ligature) | `["re"]` | the ligature is a single non-ASCII code point |
-| `co­operate` (soft hyphen) | `["co", "operate"]` | an *invisible* character splits a word |
-| `x²` | `["x"]` | superscript digits are not in `[0-9]` |
-| `ＡＢ` fullwidth | `[]` | fullwidth Latin is outside the ASCII range |
-| `日本語` | `[]` | entirely unsearchable |
+| Input | Before 0.6.0 | Now | Why it changed |
+| --- | --- | --- | --- |
+| `café` composed | `["caf"]` | `["café"]` | the accented letter is a word character |
+| `café` decomposed | `["cafe"]` | `["café"]` | composed first, so both spellings agree |
+| `naïve` | `["na", "ve"]` | `["naïve"]` | no longer split at the accent |
+| `Müller` | `["m", "ller"]` | `["müller"]` | no longer split at the accent |
+| `Straße` | `["stra", "e"]` | `["straße"]` | sharp s is a word character |
+| `ﬁre` (fi ligature) | `["re"]` | `["ﬁre"]` | kept whole under NFC, `["fire"]` under NFKC |
+| `co­operate` (soft hyphen) | `["co", "operate"]` | `["co", "operate"]` | an *invisible* character still splits a word |
+| `x²` | `["x"]` | `["x²"]` | superscript two is a digit, `["x2"]` under NFKC |
+| `ＡＢ` fullwidth | `[]` | `["ａｂ"]` | fullwidth Latin are letters, `["ab"]` under NFKC |
+| `日本語` | `[]` | `["日本", "本語"]` | bigrams, where there were no tokens at all |
+| `Ελλάδα` | `[]` | `["ελλάδα"]` | one word, where there were no tokens at all |
 
-### The real defect: normalisation form changes the answer
+### The defect that is now fixed: normalisation form changed the answer
 
-The first two rows are the same word, rendered identically on screen,
+The first two rows were the same word, rendered identically on screen,
 tokenizing differently:
 
 ```text
@@ -193,16 +257,20 @@ tokenizing differently:
 "café"  decomposed (c a f e ́)   ->  ["cafe"]
 ```
 
-In composed form the accented letter is a single non-ASCII code point and
-vanishes. In decomposed form it is ASCII `e` followed by a combining mark, so
-the `e` survives. **A document stored in one form and a query typed in the other
-will not match**, even though both look identical to the user.
+In composed form the accented letter was a single non-ASCII code point and
+vanished. In decomposed form it was ASCII `e` followed by a combining mark, so
+the `e` survived. **A document stored in one form and a query typed in the other
+did not match**, though both looked identical to the user.
 
-This is a defect in the rule, not in its implementation. The fix is a single
-`unicodedata.normalize` call before lowercasing. It is deliberately left unfixed
-for now so the choice can be made against a measurement on a real corpus rather
-than on intuition, and the behaviour is pinned by a test so it cannot change
-silently.
+That was a defect in the rule, not in its implementation, and the fix is a
+single `unicodedata.normalize` call before lowercasing. Three tests pinned the
+broken behaviour so it could not be fixed silently; they now assert that both
+spellings agree.
+
+**Every index built before this change is refused rather than read**, because
+the analyzer fingerprint changed. An old index queried by a new build would
+return nothing for the affected documents with no error anywhere, so the
+mismatch is raised instead, naming both fingerprints and saying to rebuild.
 
 ### Throughput
 
@@ -262,7 +330,7 @@ cases, every expected value read from a real run first, plus four property-based
 tests over arbitrary generated text. The properties are what can actually
 falsify the design rather than agree with it:
 
-1. every token matches `[a-z0-9]+`
+1. every token matches `[^\W_]+`
 2. `tokenize(" ".join(tokenize(t))) == tokenize(t)`, covering order,
    completeness and separator collapsing in a single invariant
 3. `tokenize(a + " " + b) == tokenize(a) + tokenize(b)`, the property that makes

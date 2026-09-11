@@ -7,6 +7,10 @@ easiest way to break a search engine.
 Order is normalize, tokenize, drop stopwords, stem. Stopwords are matched on
 raw tokens because the list holds readable surface words.
 
+Stemming runs on ASCII tokens only. The stemmer implements English suffix rules
+and has no defined behaviour on other scripts, so applying it to Greek or
+Cyrillic would strip sequences that carry no meaning there.
+
 The normalization form is a parameter for the same reason the stopword list is:
 it changes every term produced, so it is part of the configuration the
 fingerprint identifies rather than a fixed property of the code. Index with a
@@ -43,8 +47,10 @@ if TYPE_CHECKING:
 # Bump when a change alters the terms produced but is not visible in the
 # pattern, the stopwords or the stemmer version, such as reordering the
 # pipeline stages. Version 2 added Unicode normalization, which changes the
-# terms of every document containing a composed or decomposed letter.
-_PIPELINE_VERSION: Final = "2"
+# terms of every document containing a composed or decomposed letter. Version 3
+# added CJK bigrams and stopped stemming non-ASCII tokens; neither is visible in
+# the pattern, so neither would be caught without this.
+_PIPELINE_VERSION: Final = "3"
 _FINGERPRINT_LENGTH: Final = 16
 
 
@@ -55,7 +61,7 @@ def analyze_positioned(
 ) -> list[tuple[int, str]]:
     """Return surviving terms paired with their original token positions."""
     return [
-        (position, stem(token))
+        (position, _stem_english_only(token))
         for position, token in enumerate(tokenize(text, form))
         if token not in stopwords
     ]
@@ -68,6 +74,18 @@ def analyze(
 ) -> list[str]:
     """Return the ordered terms, for callers that do not need positions."""
     return [term for _, term in analyze_positioned(text, stopwords, form)]
+
+
+def _stem_english_only(token: str) -> str:
+    """Stem ASCII tokens and leave every other token alone.
+
+    The Porter stemmer's rules are derived from English spelling, and its
+    behaviour on Cyrillic or Greek is not wrong so much as undefined: it would
+    strip letter sequences that mean nothing in those scripts. Leaving a token
+    unstemmed costs recall on inflected forms, which is a great deal better than
+    mangling it.
+    """
+    return stem(token) if token.isascii() else token
 
 
 def fingerprint(
