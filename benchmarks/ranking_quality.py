@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from search_engine import bm25, judgements, ranking
+from search_engine import bm25, bm25f, judgements, ranking
 from search_engine.corpus import read
 from search_engine.evaluation import (
     average_precision,
@@ -72,6 +72,16 @@ def build_index() -> InvertedIndex:
     index = InvertedIndex()
     for document in read(CORPUS):
         index.add_document(document.identifier, document.indexable_text)
+    return index
+
+
+def build_index_with_fields() -> InvertedIndex:
+    """Index the evaluation corpus, recording each document's title as a field."""
+    index = InvertedIndex()
+    for document in read(CORPUS):
+        index.add_document(
+            document.identifier, document.indexable_text, document.fields
+        )
     return index
 
 
@@ -213,3 +223,16 @@ if __name__ == "__main__":
     print()
     print_aggregates(okapi, near)
     print_per_query(okapi, near)
+
+    fielded = build_index_with_fields()
+    weighted = evaluate("bm25f", bm25f.BM25FRanker(fielded), fielded, all_judgements)
+    plain_on_fielded = evaluate(
+        "bm25", bm25.BM25Ranker(fielded), fielded, all_judgements
+    )
+    print()
+    print("=" * 60)
+    print("bm25f against bm25, both over the same field-aware index")
+    print("=" * 60)
+    print()
+    print_aggregates(plain_on_fielded, weighted)
+    print_per_query(plain_on_fielded, weighted)

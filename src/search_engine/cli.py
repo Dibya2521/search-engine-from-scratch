@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 from search_engine import __version__
 from search_engine.analysis import analyze
 from search_engine.bm25 import BM25Ranker
+from search_engine.bm25f import BM25FRanker
 from search_engine.corpus import CorpusFormatError, read
 from search_engine.index import InvertedIndex, ReadableIndex
 from search_engine.persistence import IndexFormatError, load, save
@@ -44,6 +45,7 @@ EXIT_BAD_INPUT = 2
 SCORERS: Final[dict[str, Callable[[ReadableIndex], BaseRanker]]] = {
     "tfidf": Ranker,
     "bm25": BM25Ranker,
+    "bm25f": BM25FRanker,
 }
 DEFAULT_SCORER = "tfidf"
 

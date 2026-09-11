@@ -10,9 +10,11 @@ import pytest
 
 from search_engine import __version__
 from search_engine.cli import (
+    DEFAULT_SCORER,
     EXIT_BAD_INPUT,
     EXIT_NO_RESULTS,
     EXIT_OK,
+    SCORERS,
     build_parser,
     is_segment,
     main,
@@ -317,3 +319,17 @@ def test_a_query_with_nothing_near_it_suggests_nothing(
     """A suggestion nobody asked for is worse than none."""
     assert main(["search", str(built_index), "zzzzzzzzzzqqq"]) == EXIT_NO_RESULTS
     assert "did you mean" not in capsys.readouterr().err
+
+
+def test_bm25f_is_selectable_as_a_scorer(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Registered, but not the default: a default changes on evidence."""
+    assert main(["search", str(built_index), "search", "--scorer", "bm25f"]) == EXIT_OK
+    assert capsys.readouterr().out.strip()
+
+
+def test_the_default_scorer_is_still_tfidf() -> None:
+    """Neither BM25, nor proximity, nor BM25F could be shown to beat it."""
+    assert DEFAULT_SCORER == "tfidf"
+    assert set(SCORERS) == {"tfidf", "bm25", "bm25f"}
