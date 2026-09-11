@@ -251,3 +251,17 @@ def test_only_the_block_holding_the_outlier_is_scored(tmp_path: Path) -> None:
     assert result.scored == 9
     assert result.documents == expected.documents
     assert [document_id for document_id, _ in result.documents] == [4_999]
+
+
+def test_early_termination_refuses_a_proximity_ranker(
+    ranking_index: InvertedIndex,
+) -> None:
+    """It cannot reproduce a boost that depends on where terms sit.
+
+    The bounds here are per term and know nothing about position, so pruning
+    would happen against one scale and scores be reported on another. Refusing
+    is the only honest answer.
+    """
+    ranker = BM25Ranker(ranking_index, proximity=True)
+    with pytest.raises(ValueError, match="cannot reproduce a proximity boost"):
+        rank_wand(ranking_index, ranker, analyze("computer"), 10)

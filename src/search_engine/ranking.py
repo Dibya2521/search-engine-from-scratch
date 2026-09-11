@@ -27,6 +27,11 @@ rule. Any difference in the results is then caused by the formula alone.
 `TopK` holds the same selection rule for a caller that produces scores one at a
 time instead of all at once, and that needs the score of the lowest result held
 so far while it works.
+
+Any ranker can be built with `proximity=True`, which multiplies each score by
+how close together the query terms appear in that document. It is **off by
+default**, because on the collection this project can measure against it cannot
+be shown to help. See `search_engine.proximity` and `docs/06-ranking.md`.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ import math
 from typing import TYPE_CHECKING
 
 from search_engine.analysis import analyze
+from search_engine.proximity import minimum_span, proximity_boost
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -154,12 +160,18 @@ class BaseRanker:
     snapshots depend on the whole corpus and change when a document is added.
     """
 
-    def __init__(self, index: ReadableIndex) -> None:
+    def __init__(self, index: ReadableIndex, *, proximity: bool = False) -> None:
         self._index = index
         self._built_for = index.document_count
+        self._proximity = proximity
         self._idf = {
             term: inverse_document_frequency(index, term) for term in index.terms
         }
+
+    @property
+    def proximity(self) -> bool:
+        """Return whether `rank` multiplies scores by a proximity boost."""
+        return self._proximity
 
     def _check_fresh(self) -> None:
         current = self._index.document_count
@@ -189,8 +201,9 @@ class BaseRanker:
         if not terms or limit <= 0:
             return []
         weights = self.query_weights(terms)
+        distinct = tuple(dict.fromkeys(terms))
         scored = (
-            (score, -document_id)
+            (score * self._nearness(distinct, document_id), -document_id)
             for document_id in candidates
             if (score := self.score(weights, document_id)) > 0
         )
@@ -198,12 +211,23 @@ class BaseRanker:
             (-negated_id, score) for score, negated_id in heapq.nlargest(limit, scored)
         ]
 
+    def _nearness(self, terms: Sequence[str], document_id: int) -> float:
+        """Return the proximity multiplier for one document, or 1.0 when off.
+
+        Costs one postings lookup per query term, the same as scoring does, so
+        it is bounded by the same cache that keeps scoring linear.
+        """
+        if not self._proximity:
+            return 1.0
+        positions = [self._index.postings(term).get(document_id, ()) for term in terms]
+        return proximity_boost(minimum_span(positions), len(terms))
+
 
 class Ranker(BaseRanker):
     """Scores documents by TF-IDF cosine similarity."""
 
-    def __init__(self, index: ReadableIndex) -> None:
-        super().__init__(index)
+    def __init__(self, index: ReadableIndex, *, proximity: bool = False) -> None:
+        super().__init__(index, proximity=proximity)
         self._norms = self._document_norms()
 
     def _document_norms(self) -> dict[int, float]:

@@ -201,7 +201,8 @@ def rank_wand(
     it into the results.
 
     Raises:
-        ValueError: If limit is not positive.
+        ValueError: If limit is not positive, or if the ranker applies a
+            proximity boost.
     """
     return search_wand(index, ranker, terms, limit).documents
 
@@ -215,8 +216,10 @@ def search_wand(
     """Return what `rank_wand` returns, and how many documents were scored.
 
     Raises:
-        ValueError: If limit is not positive.
+        ValueError: If limit is not positive, or if the ranker applies a
+            proximity boost.
     """
+    _refuse_proximity(ranker)
     results = TopK(limit)
     weights = ranker.query_weights(terms)
     cursors = _open_cursors(index, ranker, weights)
@@ -287,6 +290,26 @@ def _skip_blocks(
     stop = min(stops)
     for _, cursor in holders:
         cursor.advance(stop)
+
+
+def _refuse_proximity(ranker: BM25Ranker) -> None:
+    """Refuse a ranker whose scores this cannot reproduce.
+
+    A proximity boost is applied by `rank` after scoring, and depends on where
+    every query term sits in the document. The bounds here are per term and know
+    nothing about position, so early termination would prune against one scale
+    and report another. Returning quietly wrong results is the one outcome this
+    module exists to avoid.
+
+    Raises:
+        ValueError: If the ranker applies a proximity boost.
+    """
+    if ranker.proximity:
+        message = (
+            "early termination cannot reproduce a proximity boost: "
+            "rank the candidates directly, or build the ranker without it"
+        )
+        raise ValueError(message)
 
 
 def _open_cursors(

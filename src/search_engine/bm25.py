@@ -80,8 +80,15 @@ class BM25Ranker(BaseRanker):
         b: Length correction, from 0.0 for none to 1.0 for full.
     """
 
-    def __init__(self, index: ReadableIndex, k1: float = K1, b: float = B) -> None:
-        super().__init__(index)
+    def __init__(
+        self,
+        index: ReadableIndex,
+        k1: float = K1,
+        b: float = B,
+        *,
+        proximity: bool = False,
+    ) -> None:
+        super().__init__(index, proximity=proximity)
         self._k1 = k1
         self._b = b
         # BM25 needs its own inverse document frequency, not the TF-IDF one the

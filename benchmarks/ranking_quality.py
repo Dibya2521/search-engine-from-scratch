@@ -193,6 +193,12 @@ if __name__ == "__main__":
     all_judgements = judgements.load(JUDGEMENTS)
     tfidf = evaluate("tf-idf", ranking.Ranker(built), built, all_judgements)
     okapi = evaluate("bm25", bm25.BM25Ranker(built), built, all_judgements)
+    near = evaluate(
+        "bm25+proximity",
+        bm25.BM25Ranker(built, proximity=True),
+        built,
+        all_judgements,
+    )
 
     print(f"corpus    {built.document_count} documents")
     print(f"queries   {len(all_judgements)}")
@@ -200,3 +206,10 @@ if __name__ == "__main__":
     print()
     print_aggregates(tfidf, okapi)
     print_per_query(tfidf, okapi)
+    print()
+    print("=" * 60)
+    print("proximity boost against the same scorer without it")
+    print("=" * 60)
+    print()
+    print_aggregates(okapi, near)
+    print_per_query(okapi, near)
