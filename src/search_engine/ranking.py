@@ -41,6 +41,7 @@ import math
 from typing import TYPE_CHECKING
 
 from search_engine.analysis import analyze
+from search_engine.index import is_field_term
 from search_engine.proximity import minimum_span, proximity_boost
 
 if TYPE_CHECKING:
@@ -237,7 +238,8 @@ class Ranker(BaseRanker):
         for each document scored.
         """
         squares: dict[int, float] = {}
-        for term, weight in self._idf.items():
+        for term in self._content_terms():
+            weight = self._idf[term]
             for document_id, positions in self._index.postings(term).items():
                 contribution = (len(positions) * weight) ** 2
                 squares[document_id] = squares.get(document_id, 0.0) + contribution
@@ -264,10 +266,19 @@ class Ranker(BaseRanker):
         """
         weights = {
             term: len(positions) * self._idf[term]
-            for term in self._index.terms
+            for term in self._content_terms()
             if (positions := self._index.postings(term).get(document_id)) is not None
         }
         return normalize(weights)
+
+    def _content_terms(self) -> list[str]:
+        """Return the terms that describe the document's own content.
+
+        A field-qualified term repeats content already counted under its
+        unqualified form, so a vector including both would count a title twice
+        and no longer be the vector the score is defined against.
+        """
+        return [term for term in self._idf if not is_field_term(term)]
 
     def score(self, weights: Mapping[str, float], document_id: int) -> float:
         """Return the cosine similarity of a document to a weighted query.

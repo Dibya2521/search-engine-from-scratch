@@ -16,7 +16,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.index import InvertedIndex
+from search_engine.index import TITLE_FIELD, InvertedIndex
 from search_engine.query import search
 from search_engine.ranking import (
     Ranker,
@@ -262,3 +262,22 @@ def test_the_threshold_is_zero_until_the_limit_is_held() -> None:
 def test_a_selection_of_nothing_is_rejected(limit: int) -> None:
     with pytest.raises(ValueError, match="limit must be positive"):
         TopK(limit)
+
+
+def test_field_terms_do_not_change_a_document_vector() -> None:
+    """A qualified term repeats content the vector already counts.
+
+    Including it would inflate every norm, so recording fields would silently
+    change every TF-IDF score in the index, which is the opposite of what
+    adding a field is supposed to do.
+    """
+    body = "a body about snakes and code"
+    plain = InvertedIndex()
+    plain.add_document(1, f"Python guide {body}")
+    fielded = InvertedIndex()
+    fielded.add_document(1, f"Python guide {body}", {TITLE_FIELD: "Python guide"})
+    assert Ranker(fielded).document_vector(1) == Ranker(plain).document_vector(1)
+    candidates = [1]
+    assert Ranker(fielded).rank("python", candidates) == Ranker(plain).rank(
+        "python", candidates
+    )

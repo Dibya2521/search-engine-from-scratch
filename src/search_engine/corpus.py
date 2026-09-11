@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from search_engine.index import TITLE_FIELD
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
@@ -58,6 +60,16 @@ class Document:
     identifier: int
     title: str
     text: str
+
+    @property
+    def fields(self) -> dict[str, str]:
+        """Return the parts worth telling apart, for a caller indexing fields.
+
+        Only the title, because it is the only part of a corpus record that is
+        separately meaningful. A term in a title says more about a document than
+        the same term in its fortieth paragraph.
+        """
+        return {TITLE_FIELD: self.title}
 
     @property
     def indexable_text(self) -> str:

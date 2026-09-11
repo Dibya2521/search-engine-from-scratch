@@ -14,12 +14,24 @@ Postings are keyed by document identifier rather than held as a sorted list.
 Both shapes appear in the literature; a mapping is chosen because every query
 operation needed here is a set operation over document identifiers, and
 dictionary keys give those directly.
+
+A term can also be qualified by the field it came from, so `title:python` sits
+in the same dictionary beside `python`. That is the cheapest of the three ways
+to record fields, and deliberately so: per-field postings maps or a field
+bitmask beside each position would both change the on-disk format, and this
+changes nothing. The cost is that the vocabulary grows and a title's terms are
+stored twice, which is measured rather than assumed.
+
+**A qualified term cannot be forged from document text.** The separator is not a
+word character, so the tokenizer never emits it: a body containing the literal
+text `title:python` produces the two terms `titl` and `python` and never the
+qualified one.
 """
 
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from search_engine.analysis import analyze_positioned
 
@@ -27,6 +39,21 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
 _NO_POSTINGS: Mapping[int, Sequence[int]] = MappingProxyType({})
+
+# Not a word character, so no token can contain it and no document text can be
+# mistaken for a qualified term.
+FIELD_SEPARATOR: Final = ":"
+TITLE_FIELD: Final = "title"
+
+
+def field_term(field: str, term: str) -> str:
+    """Return a term qualified by the field it occurred in."""
+    return f"{field}{FIELD_SEPARATOR}{term}"
+
+
+def is_field_term(term: str) -> bool:
+    """Return whether a term is qualified by a field."""
+    return FIELD_SEPARATOR in term
 
 
 class ReadableIndex(Protocol):
@@ -122,8 +149,15 @@ class InvertedIndex:
         }
         return index
 
-    def add_document(self, document_id: int, text: str) -> None:
+    def add_document(
+        self, document_id: int, text: str, fields: Mapping[str, str] | None = None
+    ) -> None:
         """Analyze a document and record every term occurrence in it.
+
+        `fields` names parts of the same document worth telling apart, such as
+        its title. Each is indexed a second time under terms qualified by the
+        field name, so `title:python` can be asked for without changing
+        anything a search for `python` already returns.
 
         Raises:
             DuplicateDocumentError: If this identifier was already added.
@@ -132,8 +166,15 @@ class InvertedIndex:
             raise DuplicateDocumentError(document_id)
         self._document_ids.add(document_id)
         self._lengths = None
+        self._record(document_id, text, "")
+        for field, content in (fields or {}).items():
+            self._record(document_id, content, field)
+
+    def _record(self, document_id: int, text: str, field: str) -> None:
+        """Add one text's terms, qualified by a field name when there is one."""
         for position, term in analyze_positioned(text):
-            self._postings.setdefault(term, {}).setdefault(document_id, []).append(
+            key = field_term(field, term) if field else term
+            self._postings.setdefault(key, {}).setdefault(document_id, []).append(
                 position
             )
 
@@ -186,8 +227,17 @@ class InvertedIndex:
         return self._lengths.get(document_id, 0)
 
     def _compute_lengths(self) -> dict[int, int]:
+        """Count each occurrence once, ignoring the field-qualified copies.
+
+        A qualified term repeats content already counted under its unqualified
+        form, so counting both would inflate every length a length-normalising
+        scorer divides by, and a document with a long title would look longer
+        than it is.
+        """
         lengths: dict[int, int] = {}
-        for entries in self._postings.values():
+        for term, entries in self._postings.items():
+            if is_field_term(term):
+                continue
             for document_id, positions in entries.items():
                 lengths[document_id] = lengths.get(document_id, 0) + len(positions)
         return lengths

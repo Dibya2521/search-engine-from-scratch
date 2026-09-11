@@ -7,7 +7,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from search_engine.analysis import analyze, analyze_positioned
-from search_engine.index import DuplicateDocumentError, InvertedIndex
+from search_engine.index import (
+    TITLE_FIELD,
+    DuplicateDocumentError,
+    InvertedIndex,
+    field_term,
+    is_field_term,
+)
 
 
 def _index_of(texts: list[str]) -> InvertedIndex:
@@ -166,3 +172,95 @@ def test_vocabulary_is_the_union_of_every_document(texts: list[str]) -> None:
     expected = {term for text in texts for term in analyze(text)}
     assert set(index.terms) == expected
     assert index.vocabulary_size == len(expected)
+
+
+def titled(title: str, body: str) -> InvertedIndex:
+    """Index one document with its title recorded as a field."""
+    index = InvertedIndex()
+    index.add_document(1, f"{title} {body}", {TITLE_FIELD: title})
+    return index
+
+
+def test_a_title_term_is_findable_qualified_and_unqualified() -> None:
+    """The unqualified form is what every existing query already searches."""
+    index = titled("Python guide", "a body about snakes")
+    assert 1 in index.postings("python")
+    assert 1 in index.postings(field_term(TITLE_FIELD, "python"))
+
+
+def test_a_body_term_is_not_findable_as_a_title_term() -> None:
+    index = titled("Other heading", "a body about python")
+    assert 1 in index.postings("python")
+    assert index.postings(field_term(TITLE_FIELD, "python")) == {}
+
+
+def test_recording_fields_leaves_the_unqualified_postings_alone() -> None:
+    """The assertion that makes this change safe: nothing existing moved."""
+    body = "a body about snakes and code"
+    plain = InvertedIndex()
+    plain.add_document(1, f"Python guide {body}")
+    fielded = titled("Python guide", body)
+    for term in plain.terms:
+        assert fielded.postings(term) == plain.postings(term)
+        assert fielded.document_frequency(term) == plain.document_frequency(term)
+
+
+def test_a_qualified_term_does_not_lengthen_the_document() -> None:
+    """A length-normalising scorer divides by this, so it must not double count.
+
+    A qualified term repeats content already counted under its unqualified
+    form, and a document with a long title would otherwise look longer than it
+    is and score lower for every query.
+    """
+    body = "a body about snakes and code"
+    plain = InvertedIndex()
+    plain.add_document(1, f"Python guide {body}")
+    assert titled("Python guide", body).document_length(1) == plain.document_length(1)
+
+
+def test_the_vocabulary_grows_by_the_distinct_title_terms() -> None:
+    """The price of the cheap approach, stated as an exact count."""
+    body = "a body about snakes and code"
+    plain = InvertedIndex()
+    plain.add_document(1, f"Python guide {body}")
+    fielded = titled("Python guide", body)
+    added = set(fielded.terms) - set(plain.terms)
+    assert added == {field_term(TITLE_FIELD, term) for term in analyze("Python guide")}
+    assert fielded.vocabulary_size == plain.vocabulary_size + len(added)
+
+
+def test_body_text_cannot_forge_a_qualified_term() -> None:
+    """Adversarial: the separator is not a word character, so no token holds it.
+
+    A body containing the literal `title:python` tokenizes to two ordinary
+    terms, so it can never be mistaken for a term the indexer qualified.
+    """
+    index = InvertedIndex()
+    index.add_document(1, "a body mentioning title:python literally")
+    assert index.postings(field_term(TITLE_FIELD, "python")) == {}
+    assert 1 in index.postings("python")
+    assert 1 in index.postings(analyze("title")[0])
+    assert not any(is_field_term(term) for term in index.terms)
+
+
+def test_an_empty_title_adds_no_qualified_terms() -> None:
+    """Adversarial: a field with no content must not create an empty term."""
+    index = InvertedIndex()
+    index.add_document(1, "a body with no title", {TITLE_FIELD: ""})
+    assert not any(is_field_term(term) for term in index.terms)
+
+
+def test_a_document_with_no_fields_behaves_as_before() -> None:
+    index = InvertedIndex()
+    index.add_document(1, "plain document", None)
+    assert not any(is_field_term(term) for term in index.terms)
+
+
+@pytest.mark.parametrize(
+    ("field", "term"), [("title", "python"), ("body", "a1"), ("x", "y")]
+)
+def test_a_qualified_term_is_recognised_and_an_unqualified_one_is_not(
+    field: str, term: str
+) -> None:
+    assert is_field_term(field_term(field, term))
+    assert not is_field_term(term)

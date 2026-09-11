@@ -158,3 +158,15 @@ def test_any_generated_corpus_reads_back(
     ]
     for document, (_, title, _) in zip(documents, records, strict=True):
         assert document.title == title
+
+
+def test_a_document_exposes_its_title_as_a_field() -> None:
+    """So an indexer can record where a term came from without re-parsing."""
+    document = Document(identifier=1, title="A Title", text="a body")
+    assert document.fields == {"title": "A Title"}
+
+
+def test_the_indexable_text_still_holds_the_title() -> None:
+    """Fields are additional, not a replacement: the joined text is unchanged."""
+    document = Document(identifier=1, title="A Title", text="a body")
+    assert document.indexable_text == "A Title a body"
