@@ -230,3 +230,34 @@ change worth measuring against the evaluation metrics rather than assumed.
   that set, only orders it.
 - **Evaluation** is the only thing that can say whether this scoring is good,
   as opposed to correct.
+- **[Query understanding](17-query-understanding.md)** adds two more ways to
+  score: a proximity boost that rewards query terms appearing close together,
+  and BM25F, which weights a title above a body. **Both are off by default**,
+  and so is BM25, for the same reason recorded below.
+
+## Why three better scorers are all switched off
+
+BM25, the proximity boost and BM25F have each been built, measured against the
+committed judgement set, and found **indistinguishable from chance**. All three
+are kept, and none is the default.
+
+| Comparison | Mean average precision | Sign test p |
+| --- | ---: | ---: |
+| BM25 against TF-IDF | see [BM25](09-bm25.md) | not significant |
+| proximity against BM25 | +0.1% | 1.000 |
+| BM25F against BM25 | +0.3% | 0.581 |
+
+**The cause is the collection, not the scorers.** Mean reciprocal rank here is
+**0.9818** before any of them: the first result is already relevant for
+essentially every query, so there is no room above rank one for a reordering to
+occupy. A better scorer has nothing left to win.
+
+**A larger corpus would not fix it.** Relevance measurement needs judgements,
+and judgements are the expensive half; unlabelled documents supply none. What
+would settle it is queries whose relevant documents are not already at rank one,
+enough of them for a few reversals to carry a p value, and judgements written
+before the feature existed.
+
+**A default changes on evidence, never on expectation.** That rule was written
+before the first of these comparisons and has now been applied to three
+features in a row, which is what makes it a rule.

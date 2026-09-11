@@ -202,12 +202,15 @@ alternatives are.
 - [Segments, merges and recovery](docs/13-segments.md)
 - [Early termination](docs/14-early-termination.md)
 - [Caching](docs/15-caching.md)
+- [Unicode](docs/16-unicode.md)
+- [Query understanding](docs/17-query-understanding.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 - [ADR 0002: BM25 alongside TF-IDF](docs/adr/0002-bm25-alongside-tf-idf.md)
 - [ADR 0003: A compressed binary index format](docs/adr/0003-binary-index-format.md)
 - [ADR 0004: An index read where it lies, rather than loaded](docs/adr/0004-on-disk-segments.md)
 - [ADR 0005: An index of many immutable segments, published by a manifest](docs/adr/0005-segmented-index.md)
 - [ADR 0006: Postings are walked in document order, in blocks](docs/adr/0006-document-ordered-postings.md)
+- [ADR 0007: Expansion at query time, and fields as term prefixes](docs/adr/0007-query-time-expansion.md)
 
 What changed between versions, and why, is in the
 [changelog](CHANGELOG.md).

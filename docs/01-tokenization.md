@@ -86,9 +86,8 @@ query typed in the other.
 
 `NFC` composes them, and is the default. `NFKC` also folds compatibility forms,
 recovering tokens that would otherwise be dropped and destroying distinctions in
-the same breath: it turns a ligature into two letters, and a superscript two
-into an ordinary two. NFC is the default because it only ever merges spellings
-that render identically, so it cannot lose a distinction a reader can see.
+the same breath. See [Unicode](16-unicode.md) for which was chosen and on what
+evidence.
 
 ### `text.lower()`
 
@@ -268,9 +267,7 @@ broken behaviour so it could not be fixed silently; they now assert that both
 spellings agree.
 
 **Every index built before this change is refused rather than read**, because
-the analyzer fingerprint changed. An old index queried by a new build would
-return nothing for the affected documents with no error anywhere, so the
-mismatch is raised instead, naming both fingerprints and saying to rebuild.
+the analyzer fingerprint changed. See [Unicode](16-unicode.md).
 
 ### Throughput
 

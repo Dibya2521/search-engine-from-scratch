@@ -16,6 +16,69 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+### Added
+
+- **Unicode normalization before tokenizing.** The same word written two ways
+  produced two different terms, so a document stored in one form could never
+  match a query typed in the other. NFC is the default and NFKC is available as
+  a parameter.
+- **Text that is not ASCII is now indexed.** The token pattern produced zero
+  tokens for Chinese, Japanese, Korean, Greek, Cyrillic, Hebrew and Arabic; those
+  documents were unsearchable rather than degraded. A run of characters from a
+  script written without spaces becomes overlapping character bigrams.
+- `search_engine.spelling`, offering near spellings for a query that found
+  nothing, through a BK-tree over edit distance. The command line prints them to
+  stderr and keeps exit code 1.
+- `search_engine.synonyms`, expanding equivalence groups at query time, and
+  grouping adjacent words into one entity against a supplied phrase set.
+- `search_engine.proximity`, scoring a document higher when its query terms
+  appear close together. **Off by default.**
+- `search_engine.bm25f`, BM25 over weighted fields, registered as
+  `--scorer bm25f`. **Not the default.**
+- **Fields.** A document can be indexed with its title recorded separately, as
+  terms qualified `title:python` beside `python`. No format changed.
+- `docs/16-unicode.md`, `docs/17-query-understanding.md` and ADR 0007.
+- `benchmarks/unicode_forms.py`.
+
+### Changed
+
+- **Every index built before this release is refused rather than read.** The
+  analyzer fingerprint changed, because normalization and the wider token
+  pattern both alter the terms produced. An old index queried by a new build
+  would return nothing for the affected documents with no error anywhere. **To
+  upgrade, rebuild the index.**
+- Stemming no longer runs on tokens outside ASCII. The stemmer implements
+  English suffix rules and has no defined behaviour on other scripts. The
+  stemmer itself is untouched.
+- Early termination refuses a ranker built with the proximity boost, because it
+  cannot reproduce a boost that depends on where terms sit and would otherwise
+  disagree with a full scan silently.
+
+### Measured
+
+- **Three features could not be shown to help, and all three are kept and
+  switched off.** The proximity boost: mean average precision +0.1 percent, sign
+  test p **1.000**, nDCG 0.1 percent the wrong way. BM25F: mean average
+  precision +0.3 percent, every metric up, sign test p **0.581**. The cause is
+  the same both times and is not the features. Mean reciprocal rank on this
+  collection is **0.9818** before either, so the first result is already
+  relevant for nearly every query and a reordering has nowhere to show. **The
+  default scorer is unchanged**, under the rule that a default changes on
+  evidence and never on expectation.
+- **The NFC against NFKC comparison could not be taken.** Across 24 sources
+  holding 255,721 characters, only **21 lie outside ASCII** and no source
+  changes under NFC at all. NFC is chosen on the conservative argument, that it
+  cannot lose a distinction a reader can see, rather than on a measurement that
+  did not happen.
+- **Recording fields costs 10.0 percent of the vocabulary** and 9.4 percent of a
+  whole-file index on the evaluation corpus, for 3.2 percent more postings. That
+  is the price of the approach that changes no format.
+- **BM25F reduces to BM25 to within 1.1e-16** when only the document field is
+  weighted, which is one unit in the last place.
+
+Reproduce with `uv run python benchmarks/ranking_quality.py` and
+`uv run python benchmarks/unicode_forms.py`.
+
 ## [0.5.0] - 2026-09-10
 
 An index that can grow, survive a crash, and answer a query without scoring
