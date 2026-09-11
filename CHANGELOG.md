@@ -16,6 +16,22 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-11
+
+Text the engine could not read, and queries it could not understand.
+
+Seven scripts produced no tokens at all before this release, so those documents
+were unsearchable rather than merely ranked badly. Two spellings of the same
+accented word produced different terms, so one could never match the other.
+Both are fixed, and **every index built before this release is refused rather
+than misread**: the terms are different, so an old file answers a different
+question. To upgrade, rebuild it.
+
+Alongside that, five attempts at understanding a query: spelling suggestions,
+synonyms, entity segmentation, proximity and field weighting. **Two of the three
+that could be measured could not be shown to help, and all of them are kept and
+switched off**, which is now this project's answer three times running.
+
 ### Added
 
 - **Unicode normalization before tokenizing.** The same word written two ways
@@ -45,8 +61,20 @@ named, so the claim can be re-checked rather than believed.
 - **Every index built before this release is refused rather than read.** The
   analyzer fingerprint changed, because normalization and the wider token
   pattern both alter the terms produced. An old index queried by a new build
-  would return nothing for the affected documents with no error anywhere. **To
-  upgrade, rebuild the index.**
+  would return nothing for the affected documents with no error anywhere. There
+  is no migration and there should not be: the terms are different, so the old
+  file holds answers to a different question. **To upgrade, rebuild the index:**
+
+  ```bash
+  uv run search-engine index corpus.xml search.index
+  ```
+
+  A refused index names both fingerprints and says what to do:
+
+  ```text
+  index was built with analyzer 0da3e6c5c33c0e95, this build uses
+  9190455cbe0ae89d; rebuild the index
+  ```
 - Stemming no longer runs on tokens outside ASCII. The stemmer implements
   English suffix rules and has no defined behaviour on other scripts. The
   stemmer itself is untouched.
@@ -483,7 +511,8 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.2.0...v0.3.0
