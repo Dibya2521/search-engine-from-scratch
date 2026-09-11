@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.analysis import analyze, analyze_positioned
+from search_engine import analysis
+from search_engine.analysis import analyze, analyze_positioned, fingerprint
+from search_engine.index import InvertedIndex
+from search_engine.persistence import AnalyzerMismatchError, load, save
 from search_engine.stemmer import stem
 from search_engine.stopwords import DEFAULT_STOPWORDS
 from search_engine.tokenizer import tokenize
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 NO_STOPWORDS: frozenset[str] = frozenset()
 
@@ -133,3 +141,51 @@ def test_no_stopword_ever_survives(text: str) -> None:
 @given(st.text())
 def test_analyze_is_analyze_positioned_without_the_positions(text: str) -> None:
     assert analyze(text) == [term for _, term in analyze_positioned(text)]
+
+
+def test_the_normalization_form_is_part_of_the_fingerprint() -> None:
+    """Two forms produce different terms, so they must not share a digest."""
+    assert fingerprint() != fingerprint(form="NFKC")
+
+
+def test_the_stopword_list_is_part_of_the_fingerprint() -> None:
+    assert fingerprint() != fingerprint(NO_STOPWORDS)
+
+
+def test_adding_normalization_changed_the_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An index built before normalization is analysed differently from now.
+
+    That is the failure the fingerprint exists to catch, and the pipeline
+    version is what makes the two digests differ, since the token pattern, the
+    stemmer and the stopword list are all unchanged.
+    """
+    current = fingerprint()
+    monkeypatch.setattr(analysis, "_PIPELINE_VERSION", "1")
+    assert fingerprint() != current
+
+
+def test_an_index_built_before_normalization_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Written with the old digest, then read by this build, which refuses it.
+
+    Without this an old index would answer queries analysed a new way and return
+    nothing, with no error anywhere.
+    """
+    index = InvertedIndex()
+    index.add_document(1, "web search engines")
+    path = tmp_path / "old.index"
+    monkeypatch.setattr(analysis, "_PIPELINE_VERSION", "1")
+    save(index, path)
+    monkeypatch.undo()
+    with pytest.raises(AnalyzerMismatchError, match="rebuild the index"):
+        load(path)
+
+
+def test_analysis_carries_the_form_through_to_the_terms() -> None:
+    """A ligature is dropped whole under NFC and recovered under NFKC."""
+    text = f"{chr(0xFB01)}refighting"
+    assert analyze(text) == ["refight"]
+    assert analyze(text, form="NFKC") == ["firefight"]

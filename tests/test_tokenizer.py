@@ -19,7 +19,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.tokenizer import tokenize
+from search_engine.tokenizer import DEFAULT_FORM, tokenize
 
 TOKEN_SHAPE = re.compile(r"[a-z0-9]+")
 
@@ -29,6 +29,11 @@ ZERO_WIDTH_JOINER = chr(0x200D)
 KELVIN_SIGN = chr(0x212A)
 TURKISH_CAPITAL_I = chr(0x130)
 FULLWIDTH_AB = chr(0xFF21) + chr(0xFF22)
+HANGUL_SYLLABLE = chr(0xAC01)
+HANGUL_JAMO = chr(0x1100) + chr(0x1161) + chr(0x11A8)
+LIGATURE_FI = chr(0xFB01)
+MATHEMATICAL_BOLD_A = chr(0x1D400)
+ROMAN_NUMERAL_FOUR = chr(0x2163)
 
 
 @pytest.mark.parametrize(
@@ -130,29 +135,103 @@ def test_lowercasing_is_not_length_preserving() -> None:
 
 
 @pytest.mark.parametrize(
-    ("word", "composed_tokens", "decomposed_tokens"),
+    ("word", "expected"),
     [
-        ("café", ["caf"], ["cafe"]),
-        ("naïve", ["na", "ve"], ["nai", "ve"]),
-        ("Müller", ["m", "ller"], ["mu", "ller"]),
+        ("café", ["caf"]),
+        ("naïve", ["na", "ve"]),
+        ("Müller", ["m", "ller"]),
     ],
 )
-def test_normalisation_form_changes_the_tokens_of_the_same_word(
-    word: str,
-    composed_tokens: list[str],
-    decomposed_tokens: list[str],
+def test_both_spellings_of_a_word_produce_the_same_tokens(
+    word: str, expected: list[str]
 ) -> None:
-    """Identical on screen, different tokens, so such words fail to match.
+    """The defect this replaced: identical on screen, different tokens.
 
-    Composed: the accent is one non-ASCII code point, so the whole letter goes.
-    Decomposed: the base letter is ASCII, so only the combining mark goes.
-    Pinned here so the eventual fix cannot happen silently.
+    Composed, the accent is one non-ASCII code point and the whole letter goes.
+    Decomposed, the base letter is ASCII and only the combining mark goes. Before
+    normalization those produced different terms, so a document stored in one
+    form could never match a query typed in the other. Both are composed first
+    now, so both give the composed answer.
     """
     composed = unicodedata.normalize("NFC", word)
     decomposed = unicodedata.normalize("NFD", word)
     assert composed != decomposed
-    assert tokenize(composed) == composed_tokens
-    assert tokenize(decomposed) == decomposed_tokens
+    assert tokenize(composed) == tokenize(decomposed) == expected
+
+
+@given(st.text())
+def test_any_text_tokenizes_the_same_in_either_spelling(text: str) -> None:
+    """The property the fix exists to provide, over generated input."""
+    assert tokenize(unicodedata.normalize("NFC", text)) == tokenize(
+        unicodedata.normalize("NFD", text)
+    )
+
+
+@given(st.text())
+def test_normalizing_first_changes_nothing(text: str) -> None:
+    """Tokenizing already-normalized text gives what tokenizing the raw text gives.
+
+    Normalization is idempotent, so a caller that normalized its own text is not
+    penalised and not treated differently.
+    """
+    assert tokenize(unicodedata.normalize(DEFAULT_FORM, text)) == tokenize(text)
+
+
+@given(st.text(alphabet=st.characters(max_codepoint=127)))
+def test_ascii_text_is_untouched_by_normalization(text: str) -> None:
+    """The common case must be unaffected, since ASCII is already normalized."""
+    assert unicodedata.is_normalized(DEFAULT_FORM, text)
+    assert tokenize(text) == [
+        match.group() for match in TOKEN_SHAPE.finditer(text.lower())
+    ]
+
+
+def test_a_syllable_composed_from_three_parts_tokenizes_either_way() -> None:
+    """Hangul composes from jamo, which is where naive normalization breaks.
+
+    Three code points become one, so any implementation assuming a fixed length
+    or a one-to-one mapping fails here.
+    """
+    assert len(HANGUL_JAMO) == 3
+    assert unicodedata.normalize("NFC", HANGUL_JAMO) == HANGUL_SYLLABLE
+    assert tokenize(HANGUL_JAMO) == tokenize(HANGUL_SYLLABLE) == []
+    assert (
+        tokenize(f"a{HANGUL_JAMO}b") == tokenize(f"a{HANGUL_SYLLABLE}b") == ["a", "b"]
+    )
+
+
+def test_a_code_point_above_the_basic_plane_is_handled() -> None:
+    """U+1D400 needs more than 16 bits, and folds to an ASCII letter under NFKC."""
+    assert tokenize(MATHEMATICAL_BOLD_A) == []
+    assert tokenize(MATHEMATICAL_BOLD_A, "NFKC") == ["a"]
+
+
+@pytest.mark.parametrize(
+    ("text", "under_nfc", "under_nfkc"),
+    [
+        (f"{LIGATURE_FI}re", ["re"], ["fire"]),
+        ("x²", ["x"], ["x2"]),
+        (ROMAN_NUMERAL_FOUR, [], ["iv"]),
+        (FULLWIDTH_AB, [], ["ab"]),
+    ],
+)
+def test_the_compatibility_form_recovers_tokens_and_loses_distinctions(
+    text: str, under_nfc: list[str], under_nfkc: list[str]
+) -> None:
+    """Both halves of the NFKC trade, in one table.
+
+    It recovers a ligature and a fullwidth word that NFC drops, and it makes a
+    superscript two indistinguishable from an ordinary two, which is wrong
+    wherever the difference carries meaning.
+    """
+    assert tokenize(text) == under_nfc
+    assert tokenize(text, "NFKC") == under_nfkc
+
+
+def test_the_two_forms_can_differ_in_length() -> None:
+    """A ligature is one code point under NFC and two under NFKC."""
+    assert len(unicodedata.normalize("NFC", LIGATURE_FI)) == 1
+    assert len(unicodedata.normalize("NFKC", LIGATURE_FI)) == 2
 
 
 @given(st.text())
