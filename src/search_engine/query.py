@@ -10,6 +10,10 @@ Three query forms, distinguished by how the text is written:
 Results are unordered. Every matching document is equally a match until
 something scores them, so a set is the honest return type.
 
+A free-text query can be expanded with synonyms before it reaches the postings.
+That widens what matches, so scores shift: an expanded query matches on more
+terms than the one that was typed. See `search_engine.synonyms`.
+
 Query text goes through the same analysis as documents. It has to: a query
 analyzed differently would ask for terms the index never stored.
 
@@ -32,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from search_engine.index import ReadableIndex
+    from search_engine.synonyms import SynonymTable
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,16 +134,33 @@ def _matching_phrase(
     }
 
 
-def execute(index: ReadableIndex, query: Query) -> set[int]:
-    """Run a parsed query and return the identifiers of matching documents."""
+def execute(
+    index: ReadableIndex, query: Query, synonyms: SynonymTable | None = None
+) -> set[int]:
+    """Run a parsed query and return the identifiers of matching documents.
+
+    Synonyms expand a free-text query and never a phrase query. A phrase is
+    matched on the spacing between its terms, and a term standing in for another
+    occupies no position in the document, so there is nothing to space it
+    against.
+    """
     if query.is_phrase:
         return _matching_phrase(index, query.terms, query.offsets)
-    return _matching_any_term(index, query.terms)
+    return _matching_any_term(index, _expanded(query.terms, synonyms))
 
 
-def search(index: ReadableIndex, text: str) -> set[int]:
+def _expanded(terms: Sequence[str], synonyms: SynonymTable | None) -> list[str]:
+    """Return the query terms plus every term equivalent to one of them."""
+    if synonyms is None:
+        return list(terms)
+    return sorted({member for term in terms for member in synonyms.expand(term)})
+
+
+def search(
+    index: ReadableIndex, text: str, synonyms: SynonymTable | None = None
+) -> set[int]:
     """Parse and run query text in one step."""
-    return execute(index, parse(text))
+    return execute(index, parse(text), synonyms)
 
 
 class CachedParser:
