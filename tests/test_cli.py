@@ -293,3 +293,27 @@ def test_a_corrupt_segment_reports_the_problem(
     assert main(["search", str(output), "web"]) == EXIT_BAD_INPUT
     assert "error:" in capsys.readouterr().err
     output.unlink()
+
+
+def test_a_misspelled_query_suggests_a_correction(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The commonest cause of no results, and the engine already knows the terms.
+
+    The suggestion goes to stderr so a caller piping results is not handed
+    prose, and the exit code stays at "no results", which is still what
+    happened.
+    """
+    assert main(["search", str(built_index), "serach"]) == EXIT_NO_RESULTS
+    captured = capsys.readouterr()
+    assert "no matching documents" in captured.out
+    assert "did you mean" in captured.err
+    assert "search" in captured.err
+
+
+def test_a_query_with_nothing_near_it_suggests_nothing(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A suggestion nobody asked for is worse than none."""
+    assert main(["search", str(built_index), "zzzzzzzzzzqqq"]) == EXIT_NO_RESULTS
+    assert "did you mean" not in capsys.readouterr().err

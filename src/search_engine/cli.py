@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from search_engine import __version__
+from search_engine.analysis import analyze
 from search_engine.bm25 import BM25Ranker
 from search_engine.corpus import CorpusFormatError, read
 from search_engine.index import InvertedIndex, ReadableIndex
@@ -28,6 +29,7 @@ from search_engine.segment import (
     SegmentReader,
     write_segment,
 )
+from search_engine.spelling import suggest
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence
@@ -139,16 +141,36 @@ def run_query(index_path: Path, query: str, limit: int, scorer: str) -> int:
 
 def _ranked(index: ReadableIndex, query: str, limit: int, scorer: str) -> int:
     candidates = search(index, query)
-    if not candidates:
-        print("no matching documents")
-        return EXIT_NO_RESULTS
-    ranked = SCORERS[scorer](index).rank(query, candidates, limit=limit)
+    ranked = (
+        SCORERS[scorer](index).rank(query, candidates, limit=limit)
+        if candidates
+        else []
+    )
     if not ranked:
         print("no matching documents")
+        _suggest(index, query)
         return EXIT_NO_RESULTS
     for rank, (document_id, score) in enumerate(ranked, start=1):
         print(f"{rank:>3}. {score:.4f}  document {document_id}")
     return EXIT_OK
+
+
+def _suggest(index: ReadableIndex, query: str) -> None:
+    """Print near spellings for each query term the index does not hold.
+
+    Written to stderr, so a caller piping results is not handed prose. The exit
+    code stays at "no results", which is still what happened.
+
+    Suggestions are index terms, and index terms are stemmed, so a suggestion
+    may not look like a word. It is nonetheless the term that would have
+    matched, which is the useful thing to report.
+    """
+    for term in dict.fromkeys(analyze(query)):
+        if term in index:
+            continue
+        near = suggest(index, term)
+        if near:
+            print(f"did you mean: {', '.join(near)}?", file=sys.stderr)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
