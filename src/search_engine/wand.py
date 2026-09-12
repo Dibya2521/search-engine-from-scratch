@@ -54,7 +54,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from search_engine.ranking import TopK
+from search_engine.ranking import DOCUMENTS_SCORED, TopK
 from search_engine.segment import (
     SegmentReader,
     block_identifiers,
@@ -231,6 +231,10 @@ def search_wand(
             break
         if _step(live, pivot, ranker, weights, results):
             scored += 1
+    # Counted once rather than per document: the point of this path is that
+    # the number is smaller than the candidate count, and a lock per skipped
+    # document would cost more than the skipping saves.
+    DOCUMENTS_SCORED.increment(scored)
     return WandResult(results.best(), scored)
 
 

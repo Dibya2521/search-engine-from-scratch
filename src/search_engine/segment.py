@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from typing import IO
 
     from search_engine.index import InvertedIndex
+from search_engine.metrics import REGISTRY
 
 SEGMENT_MAGIC: Final = b"search-engine-segment v"
 SEGMENT_VERSION: Final = b"2"
@@ -87,6 +88,16 @@ TERMS_PER_BLOCK: Final = 16
 # Lucene's default, and the same trade either way: larger blocks mean a smaller
 # table and looser per-block bounds, smaller blocks the reverse.
 POSTINGS_BLOCK_SIZE: Final = 128
+
+SEGMENTS_OPEN: Final = REGISTRY.gauge(
+    "segments_open", "Segment files mapped and not yet closed."
+)
+POSTINGS_CACHE_HITS: Final = REGISTRY.counter(
+    "postings_cache_hits_total", "Postings answered from a segment's own cache."
+)
+POSTINGS_CACHE_MISSES: Final = REGISTRY.counter(
+    "postings_cache_misses_total", "Postings that had to be decoded from the file."
+)
 
 _FOOTER_FIELDS: Final = 8
 _FIELD_BYTES: Final = 8
@@ -781,6 +792,9 @@ class SegmentReader:
             message = f"segment file is empty: {path}"
             raise SegmentFormatError(message) from None
         self._view = memoryview(self._map)
+        # Counted here rather than once the reader is built, so a constructor
+        # that fails after this point and calls close() balances the gauge.
+        SEGMENTS_OPEN.increment()
         try:
             self._footer = read_footer(self._view, verify=verify)
             self._dictionary = TermDictionary(self._view, self._footer)
@@ -801,6 +815,7 @@ class SegmentReader:
         self._view.release()
         self._map.close()
         self._file.close()
+        SEGMENTS_OPEN.decrement()
 
     def __enter__(self) -> Self:
         """Return the reader, so it can be used as a context manager."""
@@ -829,7 +844,9 @@ class SegmentReader:
             return self._decode(term)
         cached = self._cache.get(term)
         if cached is not MISSING:
+            POSTINGS_CACHE_HITS.increment()
             return cached
+        POSTINGS_CACHE_MISSES.increment()
         decoded = self._decode(term)
         self._cache.put(term, decoded)
         return decoded

@@ -38,16 +38,21 @@ from __future__ import annotations
 
 import heapq
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from search_engine.analysis import analyze
 from search_engine.index import is_field_term
+from search_engine.metrics import REGISTRY
 from search_engine.proximity import minimum_span, proximity_boost
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Collection, Mapping, Sequence
 
     from search_engine.index import ReadableIndex
+
+DOCUMENTS_SCORED: Final = REGISTRY.counter(
+    "documents_scored_total", "Candidate documents a scorer actually scored."
+)
 
 
 def inverse_document_frequency(index: ReadableIndex, term: str) -> float:
@@ -188,7 +193,7 @@ class BaseRanker:
         raise NotImplementedError
 
     def rank(
-        self, query: str, candidates: Iterable[int], limit: int = 10
+        self, query: str, candidates: Collection[int], limit: int = 10
     ) -> list[tuple[int, float]]:
         """Return the best candidates for a query as ``(document_id, score)``.
 
@@ -201,6 +206,10 @@ class BaseRanker:
         terms = analyze(query)
         if not terms or limit <= 0:
             return []
+        # Every candidate is scored, because selecting the best k consumes the
+        # whole generator. Early termination is what changes that, and it
+        # counts for itself.
+        DOCUMENTS_SCORED.increment(len(candidates))
         weights = self.query_weights(terms)
         distinct = tuple(dict.fromkeys(terms))
         scored = (

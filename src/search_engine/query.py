@@ -26,17 +26,36 @@ parsed.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from search_engine.analysis import analyze_positioned
 from search_engine.cache import MISSING, QUERY_CACHE_SIZE, LruCache
+from search_engine.metrics import REGISTRY
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from search_engine.index import ReadableIndex
     from search_engine.synonyms import SynonymTable
+
+QUERIES: Final = REGISTRY.counter("queries_total", "Searches run.")
+QUERY_DURATION: Final = REGISTRY.histogram(
+    "query_duration_seconds", "How long a search took, from text to identifiers."
+)
+QUERY_ERRORS: Final = REGISTRY.counter(
+    "query_errors_total", "Searches that raised instead of answering."
+)
+QUERY_ZERO_RESULTS: Final = REGISTRY.counter(
+    "query_zero_results_total", "Searches that matched no document at all."
+)
+QUERY_CACHE_HITS: Final = REGISTRY.counter(
+    "query_cache_hits_total", "Query parses answered from a cache."
+)
+QUERY_CACHE_MISSES: Final = REGISTRY.counter(
+    "query_cache_misses_total", "Query parses that had to be made."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +179,32 @@ def search(
     index: ReadableIndex, text: str, synonyms: SynonymTable | None = None
 ) -> set[int]:
     """Parse and run query text in one step."""
-    return execute(index, parse(text), synonyms)
+    return _recorded(lambda: execute(index, parse(text), synonyms))
+
+
+def _recorded(run: Callable[[], set[int]]) -> set[int]:
+    """Run one search, recording that it happened, what it cost and what it found.
+
+    Both entry points funnel through here rather than one being counted and the
+    other not. A metric covering some of the traffic is worse than no metric,
+    because it still looks like a number.
+
+    Finding nothing is counted on its own because it is the cheapest proxy
+    there is for relevance health. Nothing else in a running system notices
+    that the engine has started answering nothing.
+    """
+    started = time.perf_counter()
+    QUERIES.increment()
+    try:
+        found = run()
+    except Exception:
+        QUERY_ERRORS.increment()
+        raise
+    finally:
+        QUERY_DURATION.observe(time.perf_counter() - started)
+    if not found:
+        QUERY_ZERO_RESULTS.increment()
+    return found
 
 
 class CachedParser:
@@ -186,14 +230,16 @@ class CachedParser:
         """Return the parse of this text, from the cache when it is held."""
         cached = self._cache.get(text)
         if cached is not MISSING:
+            QUERY_CACHE_HITS.increment()
             return cached
+        QUERY_CACHE_MISSES.increment()
         parsed = parse(text)
         self._cache.put(text, parsed)
         return parsed
 
     def search(self, index: ReadableIndex, text: str) -> set[int]:
         """Run query text, reusing an earlier parse of the same text."""
-        return execute(index, self.parse(text))
+        return _recorded(lambda: execute(index, self.parse(text)))
 
     @property
     def cache(self) -> LruCache[str, Query]:

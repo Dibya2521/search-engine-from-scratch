@@ -57,6 +57,19 @@ named, so the claim can be re-checked rather than believed.
   mode, so a caller that asked for JSON is never handed prose.
 - `index` writes the source text beside the index it builds, in both formats,
   which is what the passages are cut from.
+- **`search_engine.metrics`: counters, gauges and histograms, exposed in the
+  Prometheus text format.** Durations are counted into fixed buckets rather
+  than averaged, because a mean hides the tail and the tail is what a person
+  notices: a search averaging 20 ms can have a 99th percentile of four
+  seconds. Bucket counts also add up across processes, and means do not.
+- The engine records what it does: searches run, how long they took, how many
+  raised, how many matched nothing, how many documents a scorer actually
+  scored, how many segments are mapped, and the hit and miss counts of the
+  query and postings caches. **Searches that match nothing are counted on
+  their own**, because it is the cheapest proxy there is for relevance health.
+- Every metric mutation takes a lock, because the serving layer will be
+  concurrent and a count that is occasionally short is worse than no count: it
+  is still believed.
 
 ### Changed
 
@@ -76,6 +89,14 @@ named, so the claim can be re-checked rather than believed.
   command line says once, on stderr, that there are no snippets and falls back
   to printing identifiers. That is deliberately gentler than the merge path,
   where carrying on without the text would destroy it.
+- `BaseRanker.rank` takes a `Collection` of candidates rather than an
+  `Iterable`, so it can report how many it scored without consuming them
+  twice. Every caller already passed a set.
+- **A quantile read from a histogram is an upper bound, not the true value.**
+  It is the bound of the bucket the quantile falls in, so it is never too
+  small and is wrong by at most that bucket's width. An operator who does not
+  know this will chase a regression that is a bucket boundary, so it is
+  written in the docstring rather than left to be discovered.
 
 ### Measured
 
@@ -86,6 +107,12 @@ named, so the claim can be re-checked rather than believed.
   **5.16**. That cost is the entire argument against owning the text rather than
   seeking back into the corpus file, and it is why it is published rather than
   assumed. Reproduce with `uv run python benchmarks/document_store.py`.
+- One metric update costs **186 ns for a counter and 341 ns for a histogram
+  observation**, lock included, best of five runs of 200,000 through
+  `timeit`, so both figures carry one Python call each. A search pays about
+  900 ns of that fixed, against a per-candidate scoring cost of 1.7
+  microseconds already measured. What the lock costs under real concurrency is
+  a load-test question and is not answered by this.
 
 ## [0.6.0] - 2026-09-11
 
