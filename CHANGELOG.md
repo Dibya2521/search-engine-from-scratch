@@ -86,6 +86,19 @@ named, so the claim can be re-checked rather than believed.
   that is correct under threads and coroutines alike.
 - `search --log` writes those lines to stderr. Results stay on stdout, so a
   pipe gets one or the other and never both.
+- **`search_engine.access`: a cost limit on queries, and a permit applied
+  before the top k is chosen.** Both close defects rather than adding
+  features.
+- **Query cost is now bounded.** A phrase of fifty terms, or a query built from
+  the commonest terms in the corpus, did work proportional to the whole index,
+  which one client could use to occupy the engine indefinitely. Queries are
+  judged by estimated cost rather than by shape, because a list of forbidden
+  shapes is always one query behind whoever is writing them. **The estimate
+  reads no postings**: document frequency already sits beside each term, put
+  there so a scorer would not have to count, and it answers this too.
+- `rank`, `rank_wand` and `search_wand` take a `permit`, deciding which
+  documents a caller may see. **It is consulted before a document is scored**,
+  not applied to the finished list.
 
 ### Changed
 
@@ -119,6 +132,15 @@ named, so the claim can be re-checked rather than believed.
 - **A result set is never logged**, only a line about one. It is unbounded, it
   is the largest thing in a request, and writing it is the fastest way to fill
   a disk.
+- **Filtering results after selecting them is a data leak, and this is the
+  release that stops it.** Ask for ten, get seven, and the three gaps have told
+  you that documents you cannot see exist. With early termination it is worse:
+  a forbidden document that reached the results sets the threshold, and pruning
+  against a threshold set by documents you cannot see drops documents you can.
+  A property test asserts that early termination and a full scan return exactly
+  the same list under any permit.
+- A query beyond the limits raises `QueryTooExpensiveError`, which the command
+  line reports as bad input with exit code 2.
 
 ### Measured
 

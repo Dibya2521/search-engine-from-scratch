@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from search_engine import __version__
+from search_engine.access import MAX_QUERY_TERMS
 from search_engine.cli import (
     ANSI_BOLD,
     ANSI_RESET,
@@ -650,3 +651,12 @@ def test_the_log_flag_writes_structured_lines_to_stderr(
     assert len({row["correlation_id"] for row in records}) == 1
     assert "Gardening" in captured.out
     assert "{" not in captured.out
+
+
+def test_a_query_beyond_the_cost_limit_is_bad_input(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Refusing to work is an answer about the request, so it is exit code 2."""
+    long_query = " ".join(f"term{number}" for number in range(MAX_QUERY_TERMS + 1))
+    assert main(["search", str(built_index), long_query]) == EXIT_BAD_INPUT
+    assert "the limit is" in capsys.readouterr().err

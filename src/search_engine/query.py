@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from search_engine.access import refuse_expensive
 from search_engine.analysis import analyze_positioned
 from search_engine.cache import MISSING, QUERY_CACHE_SIZE, LruCache
 from search_engine.metrics import REGISTRY
@@ -165,10 +166,19 @@ def execute(
     matched on the spacing between its terms, and a term standing in for another
     occupies no position in the document, so there is nothing to space it
     against.
+
+    The cost is checked against the terms actually about to be read, expansion
+    included, and before any posting is touched.
+
+    Raises:
+        QueryTooExpensiveError: If the query would cost more than the limits
+            allow.
     """
+    terms = query.terms if query.is_phrase else _expanded(query.terms, synonyms)
+    refuse_expensive(index, terms)
     if query.is_phrase:
         return _matching_phrase(index, query.terms, query.offsets)
-    return _matching_any_term(index, _expanded(query.terms, synonyms))
+    return _matching_any_term(index, terms)
 
 
 def _expanded(terms: Sequence[str], synonyms: SynonymTable | None) -> list[str]:

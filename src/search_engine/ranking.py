@@ -48,6 +48,7 @@ from search_engine.proximity import minimum_span, proximity_boost
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
 
+    from search_engine.access import Permit
     from search_engine.index import ReadableIndex
 
 DOCUMENTS_SCORED: Final = REGISTRY.counter(
@@ -193,7 +194,11 @@ class BaseRanker:
         raise NotImplementedError
 
     def rank(
-        self, query: str, candidates: Collection[int], limit: int = 10
+        self,
+        query: str,
+        candidates: Collection[int],
+        limit: int = 10,
+        permit: Permit | None = None,
     ) -> list[tuple[int, float]]:
         """Return the best candidates for a query as ``(document_id, score)``.
 
@@ -202,19 +207,29 @@ class BaseRanker:
 
         Selection uses a heap rather than a full sort, which is O(n log k)
         rather than O(n log n) for k results out of n candidates.
+
+        ``permit`` says which documents this caller may see, and is applied
+        before scoring rather than to the finished list. Filtering afterwards
+        returns fewer than ``limit`` results, and the gaps tell the caller that
+        documents they cannot see exist.
         """
         terms = analyze(query)
         if not terms or limit <= 0:
             return []
-        # Every candidate is scored, because selecting the best k consumes the
-        # whole generator. Early termination is what changes that, and it
-        # counts for itself.
-        DOCUMENTS_SCORED.increment(len(candidates))
+        allowed = (
+            candidates
+            if permit is None
+            else [document_id for document_id in candidates if permit(document_id)]
+        )
+        # Every permitted candidate is scored, because selecting the best k
+        # consumes the whole generator. Early termination is what changes that,
+        # and it counts for itself.
+        DOCUMENTS_SCORED.increment(len(allowed))
         weights = self.query_weights(terms)
         distinct = tuple(dict.fromkeys(terms))
         scored = (
             (score * self._nearness(distinct, document_id), -document_id)
-            for document_id in candidates
+            for document_id in allowed
             if (score := self.score(weights, document_id)) > 0
         )
         return [

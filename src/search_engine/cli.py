@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from search_engine import __version__
+from search_engine.access import QueryTooExpensiveError
 from search_engine.analysis import analyze
 from search_engine.bm25 import BM25Ranker
 from search_engine.bm25f import BM25FRanker
@@ -268,7 +269,12 @@ def _search_and_print(options: Options) -> int:
                 results = _results(index, store, options.query, ranked)
                 _report(results, options, stored=store is not None)
             return EXIT_OK
-    except (OSError, IndexFormatError, SegmentFormatError) as error:
+    except (
+        OSError,
+        IndexFormatError,
+        SegmentFormatError,
+        QueryTooExpensiveError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_BAD_INPUT
 

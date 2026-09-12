@@ -54,6 +54,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from search_engine.access import allow_all
 from search_engine.ranking import DOCUMENTS_SCORED, TopK
 from search_engine.segment import (
     SegmentReader,
@@ -64,6 +65,7 @@ from search_engine.segment import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
+    from search_engine.access import Permit
     from search_engine.bm25 import BM25Ranker
     from search_engine.codecs import Bytelike
     from search_engine.index import ReadableIndex
@@ -193,6 +195,7 @@ def rank_wand(
     ranker: BM25Ranker,
     terms: Sequence[str],
     limit: int,
+    permit: Permit | None = None,
 ) -> list[tuple[int, float]]:
     """Return the best scoring documents without scoring all of them.
 
@@ -204,7 +207,7 @@ def rank_wand(
         ValueError: If limit is not positive, or if the ranker applies a
             proximity boost.
     """
-    return search_wand(index, ranker, terms, limit).documents
+    return search_wand(index, ranker, terms, limit, permit).documents
 
 
 def search_wand(
@@ -212,8 +215,14 @@ def search_wand(
     ranker: BM25Ranker,
     terms: Sequence[str],
     limit: int,
+    permit: Permit | None = None,
 ) -> WandResult:
     """Return what `rank_wand` returns, and how many documents were scored.
+
+    ``permit`` is consulted before a document is scored and before it can enter
+    the results. That ordering is the whole of it: a forbidden document that
+    reached the heap would set a threshold, and pruning against a threshold set
+    by documents the caller cannot see drops documents they can.
 
     Raises:
         ValueError: If limit is not positive, or if the ranker applies a
@@ -222,6 +231,7 @@ def search_wand(
     _refuse_proximity(ranker)
     results = TopK(limit)
     weights = ranker.query_weights(terms)
+    scoring = _Scoring(ranker, weights, permit or allow_all)
     cursors = _open_cursors(index, ranker, weights)
     scored = 0
     while True:
@@ -229,7 +239,7 @@ def search_wand(
         pivot = _pivot(live, results.threshold)
         if pivot is None:
             break
-        if _step(live, pivot, ranker, weights, results):
+        if _step(live, pivot, scoring, results):
             scored += 1
     # Counted once rather than per document: the point of this path is that
     # the number is smaller than the candidate count, and a lock per skipped
@@ -238,11 +248,19 @@ def search_wand(
     return WandResult(results.best(), scored)
 
 
+@dataclass(frozen=True, slots=True)
+class _Scoring:
+    """What scoring one document takes: the scorer, the query, and who may see it."""
+
+    ranker: BM25Ranker
+    weights: Mapping[str, float]
+    permit: Permit
+
+
 def _step(
     live: Sequence[tuple[int, _Cursor]],
     pivot: int,
-    ranker: BM25Ranker,
-    weights: Mapping[str, float],
+    scoring: _Scoring,
     results: TopK,
 ) -> bool:
     """Score the pivot document, jump over its blocks, or close the gap to it.
@@ -255,15 +273,25 @@ def _step(
     if live[0][0] != target:
         live[0][1].advance(target)
         return False
+    if not scoring.permit(target):
+        # Before the score and before the threshold, so a document this caller
+        # cannot see never prunes one they can.
+        _past(live, target)
+        return False
     holders = live[: _last_holder(live) + 1]
     if sum(cursor.block_bound for _, cursor in holders) <= results.threshold:
         _skip_blocks(live, holders)
         return False
-    results.push(target, ranker.score(weights, target))
+    results.push(target, scoring.ranker.score(scoring.weights, target))
+    _past(live, target)
+    return True
+
+
+def _past(live: Sequence[tuple[int, _Cursor]], target: int) -> None:
+    """Move every cursor sitting on a document to just past it."""
     for document, cursor in live:
         if document == target:
             cursor.advance(target + 1)
-    return True
 
 
 def _last_holder(live: Sequence[tuple[int, _Cursor]]) -> int:
