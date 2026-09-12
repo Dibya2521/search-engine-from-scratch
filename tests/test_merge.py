@@ -19,9 +19,15 @@ from search_engine.merge import (
     select_merge,
     tier_of,
 )
+from search_engine.store import StoreFormatError, data_name, offset_name
 from search_engine.tombstones import tombstone_name
 from search_engine.writer import IndexWriter, segment_name
-from tests.conftest import assert_same_postings, build_index, write_segments
+from tests.conftest import (
+    assert_same_postings,
+    assert_stored_text,
+    build_index,
+    write_segments,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -239,6 +245,48 @@ def test_a_failed_merge_closes_what_it_already_opened(tmp_path: Path) -> None:
 
     with pytest.raises(OSError, match="segment-99999999"):
         merge_segments(tmp_path, [*manifest.segments, missing], "merged.seg")
+
+    for segment in manifest.segments:
+        (tmp_path / segment.name).unlink()
+
+
+def test_the_text_of_every_surviving_document_is_carried_across(
+    tmp_path: Path,
+) -> None:
+    """Losing text here is data loss, not a ranking that came out wrong."""
+    texts = {n: f"document number {n} about search" for n in range(MERGE_FACTOR)}
+    with IndexWriter(tmp_path, buffer_documents=1, merge=False) as writer:
+        for document_id, text in texts.items():
+            writer.add(document_id, text, title=f"page {document_id}")
+        writer.delete(1)
+
+    merged = merge_once(tmp_path, read_manifest(tmp_path))
+    assert merged is not None
+    assert_stored_text(
+        tmp_path,
+        merged.segments[-1].name,
+        {n: (f"page {n}", text) for n, text in texts.items() if n != 1},
+    )
+
+
+def test_the_stores_of_merged_inputs_are_deleted_with_them(tmp_path: Path) -> None:
+    write_segments(tmp_path, {n: f"document {n}" for n in range(MERGE_FACTOR)})
+    before = {segment.name for segment in read_manifest(tmp_path).segments}
+    merge_once(tmp_path, read_manifest(tmp_path))
+
+    for name in before:
+        assert not (tmp_path / data_name(name)).exists()
+        assert not (tmp_path / offset_name(name)).exists()
+
+
+def test_a_segment_with_no_store_cannot_be_merged(tmp_path: Path) -> None:
+    """What a directory written before the text was stored looks like."""
+    write_segments(tmp_path, {n: f"document {n}" for n in range(MERGE_FACTOR)})
+    manifest = read_manifest(tmp_path)
+    (tmp_path / data_name(manifest.segments[-1].name)).unlink()
+
+    with pytest.raises(StoreFormatError, match="cannot be read"):
+        merge_segments(tmp_path, manifest.segments, "merged.seg")
 
     for segment in manifest.segments:
         (tmp_path / segment.name).unlink()

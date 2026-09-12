@@ -16,6 +16,39 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+### Added
+
+- **The source text is now kept beside each segment**, addressable by ordinal.
+  The index holds nothing that could reconstruct a document, which is what makes
+  it small and also why a result could name a document and score it but say
+  nothing about what it says. Two files per segment: the documents as a
+  length-prefixed title followed by a length-prefixed body, and a fixed-width
+  offset file in which ordinal `n` sits at byte `8n`, so one seek reaches any
+  document with no scan and no table held in memory.
+- `IndexWriter.add` takes an optional `title`, kept for display rather than
+  indexed. A caller that wants it searchable passes it inside the text as well,
+  which is what indexing a corpus record already does.
+- Merging carries the text across, renumbered into the merged segment's own
+  ordinals. A document that survives a merge and loses its text has lost
+  something no later pass can rebuild.
+
+### Changed
+
+- **A directory written before this release cannot be merged.** Its segments
+  have no stored text beside them, and a merge that quietly produced a segment
+  without it would lose the text of everything it touched. The merge refuses and
+  names the missing file. Rebuild the index.
+
+### Measured
+
+- Storing the text costs **4.16 times the size of the segment it sits beside**,
+  and **0.26 percent more than the source text itself**, of which the offsets
+  are exactly 8 bytes per document. Over 16,000 generated documents the whole
+  on-disk footprint moves from 0.241 to 1.243 times the source, a factor of
+  **5.16**. That cost is the entire argument against owning the text rather than
+  seeking back into the corpus file, and it is why it is published rather than
+  assumed. Reproduce with `uv run python benchmarks/document_store.py`.
+
 ## [0.6.0] - 2026-09-11
 
 Text the engine could not read, and queries it could not understand.

@@ -61,6 +61,7 @@ class Record:
     kind: Kind
     document_id: int
     text: str = ""
+    title: str = ""
 
 
 class WriteAheadLog:
@@ -140,9 +141,10 @@ class WriteAheadLog:
 def _encode(record: Record) -> bytes:
     parts = [encode_number(int(record.kind)), encode_number(record.document_id)]
     if record.kind is Kind.ADD:
-        encoded = record.text.encode("utf-8")
-        parts.append(encode_number(len(encoded)))
-        parts.append(encoded)
+        for value in (record.text, record.title):
+            encoded = value.encode("utf-8")
+            parts.append(encode_number(len(encoded)))
+            parts.append(encoded)
     return b"".join(parts)
 
 
@@ -174,6 +176,15 @@ def _decode_payload(payload: bytes) -> Record | None:
         text = payload[at : at + length]
         if len(text) != length:
             return None
+        at += length
+        title = b""
+        # The title joined the record after the format existed, so a payload
+        # that ends here was written before it and carries none.
+        if at < len(payload):
+            length, at = decode_at(payload, at)
+            title = payload[at : at + length]
+            if len(title) != length:
+                return None
     except (CodecError, UnicodeDecodeError):
         return None
-    return Record(Kind.ADD, document_id, text.decode("utf-8"))
+    return Record(Kind.ADD, document_id, text.decode("utf-8"), title.decode("utf-8"))

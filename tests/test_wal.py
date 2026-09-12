@@ -12,7 +12,8 @@ from hypothesis import strategies as st
 from search_engine.codecs import encode_number
 from search_engine.directory import DirectoryIndex
 from search_engine.wal import LOG_NAME, Kind, Record, WriteAheadLog
-from search_engine.writer import IndexWriter
+from search_engine.writer import IndexWriter, segment_name
+from tests.conftest import assert_stored_text
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -216,3 +217,48 @@ def test_a_record_ending_before_its_text_length_stops_replay(
     payload = encode_number(int(Kind.ADD)) + encode_number(1)
     (tmp_path / LOG_NAME).write_bytes(frame(payload))
     assert list(log_at(tmp_path).replay()) == []
+
+
+def test_a_title_survives_the_round_trip(tmp_path: Path) -> None:
+    record = Record(Kind.ADD, 7, "the body", "The Title")
+    with log_at(tmp_path) as log:
+        log.append(record)
+    assert list(log_at(tmp_path).replay()) == [record]
+
+
+def test_a_record_written_before_titles_existed_replays_without_one(
+    tmp_path: Path,
+) -> None:
+    """The old payload ends after the text, which is what makes appending safe."""
+    payload = (
+        encode_number(int(Kind.ADD))
+        + encode_number(1)
+        + encode_number(len(b"alpha"))
+        + b"alpha"
+    )
+    (tmp_path / LOG_NAME).write_bytes(frame(payload))
+    assert list(log_at(tmp_path).replay()) == [Record(Kind.ADD, 1, "alpha")]
+
+
+def test_a_record_claiming_more_title_than_it_holds_stops_replay(
+    tmp_path: Path,
+) -> None:
+    payload = (
+        encode_number(int(Kind.ADD))
+        + encode_number(1)
+        + encode_number(1)
+        + b"a"
+        + encode_number(50)
+    )
+    (tmp_path / LOG_NAME).write_bytes(frame(payload + b"bc"))
+    assert list(log_at(tmp_path).replay()) == []
+
+
+def test_a_title_accepted_before_a_crash_reaches_the_store(tmp_path: Path) -> None:
+    """A log holding a document, a directory holding no segment, then recovery."""
+    with WriteAheadLog(tmp_path / LOG_NAME) as log:
+        log.append(Record(Kind.ADD, 1, "the body", "The Title"))
+
+    with IndexWriter(tmp_path, buffer_documents=1_000, merge=False):
+        pass
+    assert_stored_text(tmp_path, segment_name(0), {1: ("The Title", "the body")})

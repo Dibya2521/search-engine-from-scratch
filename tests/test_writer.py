@@ -8,6 +8,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from search_engine.analysis import analyze
 from search_engine.index import InvertedIndex
 from search_engine.segment import SegmentReader
 from search_engine.tombstones import tombstone_name
@@ -16,6 +17,7 @@ from search_engine.writer import (
     next_segment_number,
     segment_name,
 )
+from tests.conftest import assert_stored_text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -241,3 +243,46 @@ def test_the_writer_exposes_the_manifest_it_published(tmp_path: Path) -> None:
     assert writer.manifest.generation == 2
     assert writer.manifest.document_count == 2
     assert writer.manifest.next_segment == 2
+
+
+def test_the_store_holds_the_text_of_every_document(tmp_path: Path) -> None:
+    with IndexWriter(tmp_path, buffer_documents=1_000, merge=False) as writer:
+        for document_id, text in enumerate(TEXTS):
+            writer.add(document_id, text, title=f"page {document_id}")
+
+    assert_stored_text(
+        tmp_path,
+        segment_name(0),
+        {number: (f"page {number}", text) for number, text in enumerate(TEXTS)},
+    )
+
+
+def test_a_store_ordinal_means_what_a_segment_ordinal_means(tmp_path: Path) -> None:
+    """Identifiers arriving out of order still land at the segment's ordinals."""
+    texts = {40: "forty", 10: "ten", 30: "thirty"}
+    with IndexWriter(tmp_path, buffer_documents=1_000, merge=False) as writer:
+        for document_id, text in texts.items():
+            writer.add(document_id, text, title=str(document_id))
+
+    assert_stored_text(
+        tmp_path,
+        segment_name(0),
+        {document_id: (str(document_id), text) for document_id, text in texts.items()},
+    )
+
+
+def test_a_document_added_without_a_title_stores_an_empty_one(tmp_path: Path) -> None:
+    with IndexWriter(tmp_path, buffer_documents=1_000, merge=False) as writer:
+        writer.add(1, "a body and no title")
+
+    assert_stored_text(tmp_path, segment_name(0), {1: ("", "a body and no title")})
+
+
+def test_a_title_is_stored_and_not_indexed(tmp_path: Path) -> None:
+    """What is searchable is what the caller passed as the text, and only that."""
+    with IndexWriter(tmp_path, buffer_documents=1_000, merge=False) as writer:
+        writer.add(1, "body", title="peculiar")
+
+    with SegmentReader(tmp_path / segment_name(0)) as reader:
+        assert sorted(reader.terms) == sorted(set(analyze("body")))
+    assert_stored_text(tmp_path, segment_name(0), {1: ("peculiar", "body")})

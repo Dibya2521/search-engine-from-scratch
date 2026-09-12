@@ -15,6 +15,8 @@ import pytest
 from search_engine.cli import main as cli_main
 from search_engine.index import InvertedIndex, ReadableIndex
 from search_engine.ranking import Ranker
+from search_engine.segment import SegmentReader
+from search_engine.store import DocumentStore
 from search_engine.writer import IndexWriter
 
 SAMPLE_CORPUS = Path(__file__).parent / "fixtures" / "sample_corpus.xml"
@@ -89,6 +91,23 @@ def write_segments(directory: Path, texts: dict[int, str], buffer: int = 1) -> N
     with IndexWriter(directory, buffer_documents=buffer, merge=False) as writer:
         for document_id, text in texts.items():
             writer.add(document_id, text)
+
+
+def assert_stored_text(
+    directory: Path, name: str, expected: dict[int, tuple[str, str]]
+) -> None:
+    """Assert a segment's store holds this title and body at each of its ordinals.
+
+    Shared by the write path and the merge path, which have to agree that an
+    ordinal means the same thing in a segment and in the store beside it.
+    """
+    with (
+        SegmentReader(directory / name) as reader,
+        DocumentStore.open(directory, name, documents=len(expected)) as store,
+    ):
+        assert list(reader.document_ids) == sorted(expected)
+        for ordinal, document_id in enumerate(reader.document_ids):
+            assert (store.title(ordinal), store.text(ordinal)) == expected[document_id]
 
 
 def assert_same_postings(actual: ReadableIndex, expected: InvertedIndex) -> None:

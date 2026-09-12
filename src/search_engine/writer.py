@@ -34,6 +34,7 @@ from search_engine.index import InvertedIndex
 from search_engine.manifest import Manifest, SegmentInfo
 from search_engine.merge import merge_once
 from search_engine.segment import SegmentReader, stored_checksum, write_segment
+from search_engine.store import DocumentStore
 from search_engine.tombstones import Tombstones, tombstone_name
 from search_engine.wal import LOG_NAME, Kind, Record, WriteAheadLog
 
@@ -107,7 +108,7 @@ class IndexWriter:
         self._directory = directory
         self._buffer_documents = buffer_documents
         self._merge = merge
-        self._buffer: dict[int, str] = {}
+        self._buffer: dict[int, tuple[str, str]] = {}
         self._manifest = manifest_file.read(directory)
         # Orphans left by a crash are invisible, and their numbers are still
         # spent: reusing one would give a stale mapping a file that has changed
@@ -127,7 +128,7 @@ class IndexWriter:
         """
         for record in self._log.replay():
             if record.kind is Kind.ADD:
-                self._accept(record.document_id, record.text)
+                self._accept(record.document_id, record.text, record.title)
             else:
                 self._remove(record.document_id)
 
@@ -150,23 +151,27 @@ class IndexWriter:
                         located[document_id] = (segment.name, ordinal)
         return located
 
-    def add(self, document_id: int, text: str) -> None:
+    def add(self, document_id: int, text: str, *, title: str = "") -> None:
         """Index a document, replacing any earlier copy of the same identifier.
 
         Adding the same identifier twice is a no-op rather than an error, which
         is what makes replaying an at-least-once stream safe.
-        """
-        self._log.append(Record(Kind.ADD, document_id, text))
-        self._accept(document_id, text)
 
-    def _accept(self, document_id: int, text: str) -> None:
+        The title is stored for display and is not indexed. A caller that wants
+        it searchable joins it to the body and passes that as ``text``, which is
+        what indexing a corpus record already does.
+        """
+        self._log.append(Record(Kind.ADD, document_id, text, title))
+        self._accept(document_id, text, title)
+
+    def _accept(self, document_id: int, text: str, title: str) -> None:
         if (
             document_id not in self._buffer
             and len(self._buffer) >= self._buffer_documents
         ):
             self.flush()
         self._remove(document_id)
-        self._buffer[document_id] = text
+        self._buffer[document_id] = (title, text)
 
     def delete(self, document_id: int) -> bool:
         """Mark a document deleted, and return whether it was there to delete.
@@ -193,10 +198,10 @@ class IndexWriter:
         Returns None when there is nothing to write, so flushing twice or
         closing an untouched writer costs nothing.
 
-        The segment file is written first and the manifest second, and that
-        order is the whole of the crash safety. A process that dies between the
-        two leaves a file nothing names, which the next open ignores. Publishing
-        first would name a file that does not exist.
+        The segment and its store are written first and the manifest second,
+        and that order is the whole of the crash safety. A process that dies
+        between the two leaves files nothing names, which the next open
+        ignores. Publishing first would name a file that does not exist.
         """
         deletions = self._write_tombstones()
         if not self._buffer:
@@ -209,6 +214,7 @@ class IndexWriter:
         path = self._directory / name
         index = self._analyse()
         write_segment(index, path)
+        self._write_store(name)
         info = SegmentInfo(
             name=name,
             documents=index.document_count,
@@ -228,9 +234,19 @@ class IndexWriter:
 
     def _analyse(self) -> InvertedIndex:
         index = InvertedIndex()
-        for document_id, text in sorted(self._buffer.items()):
+        for document_id, (_, text) in sorted(self._buffer.items()):
             index.add_document(document_id, text)
         return index
+
+    def _write_store(self, name: str) -> None:
+        """Write the buffered text beside the segment just written.
+
+        Documents go in the segment's own ordinal order, which is its
+        identifiers sorted, because that is what an ordinal means.
+        """
+        with DocumentStore.writer(self._directory, name) as store:
+            for _, (title, text) in sorted(self._buffer.items()):
+                store.add(title, text)
 
     def _write_tombstones(self) -> list[SegmentInfo]:
         """Apply pending deletions to the tombstone file beside each segment.
