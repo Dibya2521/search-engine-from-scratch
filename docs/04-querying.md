@@ -198,6 +198,67 @@ Two lessons, and the second is the transferable one:
    thing it is skipping.** That is why the first attempt failed while the second
    worked, and it is not visible from reading either version.
 
+## Showing a result
+
+A candidate set and a score cannot be read. Until a result carries the title of
+the document and the passage that matched, the only way to tell whether the
+engine worked is to go and open the documents yourself.
+
+The index deliberately holds nothing that could reconstruct a document, so the
+source text is stored beside it and addressed by ordinal. That is what makes a
+passage possible, and it costs disk: measured over 16,000 generated documents
+the whole on-disk footprint moves from 0.241 to 1.243 times the source, a
+factor of 5.16. Reproduce with `uv run python benchmarks/document_store.py`.
+
+**The passage is the best window of 40 terms.** Windows are scored on the
+number of distinct query terms first and their total occurrences second, so a
+window holding all three query terms once beats one holding a single term five
+times: it shows more of *why* the document matched. Ties go to the earlier
+window, which makes the choice deterministic and makes a query matching nothing
+return the opening of the document rather than an arbitrary part of it. The
+window is then widened to the sentence it sits in, within ten terms either way,
+because a passage that begins mid-sentence reads as damage.
+
+**Highlights are character ranges, not marked-up text.** A terminal wants ANSI
+codes, an HTTP response wants ranges in JSON, and a test wants neither. Marking
+in the wrong layer is expensive to undo, so nothing below the printer decides
+how a match is shown.
+
+Finding those ranges is the real work, because analysis lowercases, drops
+stopwords and stems: `retrieval` in the text is `retriev` in the index, and
+nothing in the term says where it came from. So the tokenizer produces the
+ranges alongside the tokens, from the same code that produces the tokens, and a
+property test asserts the two agree on arbitrary text. Reconstructing the
+offsets afterwards is not possible once stemming has changed the string.
+
+The ranges index the text after Unicode normalization rather than the text as
+it arrived, because normalization composes two code points into one and nothing
+maps an offset back across that. Lowercasing is undone by a position map, built
+only when lowercasing actually changed a length: exactly one code point in
+Unicode, U+0130, lowercases to more than one character.
+
+### Three ways to print the same result
+
+| Form | For | What it prints |
+| --- | --- | --- |
+| Default | a person | the title, the score, and the passage with matched words in bold when the output is a terminal |
+| `--no-snippet` | a script | one line per result: rank, score, and the document identifier |
+| `--json` | a program | one JSON object per line: identifier, title, score, snippet and highlight ranges |
+
+Bold is applied only when `stdout` is a terminal. Output that goes into a file
+gets clean text, because escape codes in a file are noise.
+
+**A corpus is untrusted input.** A title carrying an escape sequence would
+otherwise be handed straight to the terminal to act on, so every control
+character becomes a space before anything is printed. It becomes a space rather
+than being removed so that the highlight offsets still point where they did. A
+console that cannot encode a character prints its escape instead of ending the
+process.
+
+An index built before the text was stored beside it is still perfectly
+searchable. The snippets are what is missing, so the command line says so once
+on stderr and falls back to printing identifiers.
+
 ## Alternatives
 
 | Approach | How it works | Wins when | Loses when |
@@ -227,3 +288,6 @@ get their own terms, everything else falls back to position arithmetic.
 - **The document frequency** already exposed by the index is what lets the
   phrase path pick the rarest term to start from, and it is the same number
   ranking will use to weight rare terms more heavily.
+- **The stored text** is what a passage is cut from. Without it the engine can
+  rank a document but not show one, which is the difference between a library
+  and a tool.

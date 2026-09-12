@@ -5,13 +5,23 @@ index once, then query it many times.
 
 Exit codes follow the shell convention that zero means success, so this is
 usable in a pipeline: 0 found results, 1 found none, 2 the input was wrong.
+
+Results are printed three ways and the difference is who is reading. A person
+gets the title and the passage that matched, with the matched words in bold
+when the output is a terminal. A pipe gets the same text with no escape codes
+in it, because that output ends up in a file. A caller passing ``--json`` gets
+one object per line, which is what a program should be reading rather than
+parsing columns out of prose.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -30,7 +40,9 @@ from search_engine.segment import (
     SegmentReader,
     write_segment,
 )
+from search_engine.snippet import Snippet, extract
 from search_engine.spelling import suggest
+from search_engine.store import DocumentStore, StoreFormatError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence
@@ -48,6 +60,47 @@ SCORERS: Final[dict[str, Callable[[ReadableIndex], BaseRanker]]] = {
     "bm25f": BM25FRanker,
 }
 DEFAULT_SCORER = "tfidf"
+
+ANSI_BOLD: Final = "\x1b[1m"
+ANSI_RESET: Final = "\x1b[0m"
+
+FALLBACK_COLUMNS: Final = 80
+MINIMUM_ROOM: Final = 20
+SCORE_ROOM: Final = 8
+RANK_ROOM: Final = 5
+INDENT: Final = "     "
+ELLIPSIS: Final = "..."
+
+# What a result carries when the index it came from has no text stored beside
+# it. An index like that is still searchable, so this is absence, not failure.
+NO_PASSAGE: Final = Snippet(text="", highlights=())
+
+# Every C0 control, delete, and every C1 control, mapped to a space rather than
+# removed: an escape sequence must not reach the terminal, and dropping the
+# character would move every highlight offset after it.
+_CONTROL: Final = dict.fromkeys([*range(0x20), 0x7F, *range(0x80, 0xA0)], " ")
+
+
+@dataclass(frozen=True, slots=True)
+class Options:
+    """What one search was asked to do."""
+
+    index: Path
+    query: str
+    limit: int = 10
+    scorer: str = DEFAULT_SCORER
+    snippets: bool = True
+    as_json: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Result:
+    """One ranked document, as both a person and a program want it."""
+
+    identifier: int
+    title: str
+    score: float
+    snippet: Snippet
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SCORER,
         help="ranking function to score results with",
     )
+    find.add_argument(
+        "--no-snippet",
+        action="store_true",
+        help="print identifiers and scores only, for a caller parsing them",
+    )
+    find.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON object per result and nothing else",
+    )
 
     return parser
 
@@ -88,11 +151,20 @@ def build_index(corpus: Path, output: Path, *, on_disk: bool = False) -> int:
     The two formats differ in how they are read rather than in what they hold:
     one is decoded whole when it is opened, the other is mapped and decoded a
     term at a time. See docs/12-on-disk-index.md for which to prefer.
+
+    The text is written beside the index so results can be shown rather than
+    only scored. It is held in memory until the corpus has been read, because
+    the store is written in identifier order and a corpus does not have to
+    arrive in one. That is on top of an index already several times the size of
+    its source, which is what makes this the path for a corpus that fits and
+    `IndexWriter` the path for one that does not.
     """
     index = InvertedIndex()
+    pages: dict[int, tuple[str, str]] = {}
     try:
         for document in read(corpus):
             index.add_document(document.identifier, document.indexable_text)
+            pages[document.identifier] = (document.title, document.text)
     except (OSError, CorpusFormatError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_BAD_INPUT
@@ -100,11 +172,23 @@ def build_index(corpus: Path, output: Path, *, on_disk: bool = False) -> int:
         write_segment(index, output)
     else:
         save(index, output)
+    _write_store(output, pages)
     print(
         f"indexed {index.document_count} documents, "
         f"{index.vocabulary_size} distinct terms -> {output}"
     )
     return EXIT_OK
+
+
+def _write_store(output: Path, pages: dict[int, tuple[str, str]]) -> None:
+    """Write the text beside the index, in the order a reader will assume.
+
+    An ordinal is a position in the sorted identifiers, which is what both
+    index formats hand back, so the two agree without either recording it.
+    """
+    with DocumentStore.writer(output.parent, output.name) as store:
+        for _, (title, text) in sorted(pages.items()):
+            store.add(title, text)
 
 
 def is_segment(path: Path) -> bool:
@@ -131,30 +215,222 @@ def open_index(path: Path) -> Generator[ReadableIndex]:
         yield load(path)
 
 
-def run_query(index_path: Path, query: str, limit: int, scorer: str) -> int:
+@contextmanager
+def open_store(path: Path, documents: int) -> Generator[DocumentStore | None]:
+    """Open the text stored beside an index, or nothing when there is none.
+
+    An index written before the text was stored is still perfectly searchable,
+    so a missing store costs the snippets rather than the search. That is the
+    opposite of a merge, where carrying on without the text would destroy it.
+    """
+    try:
+        store = DocumentStore.open(path.parent, path.name, documents=documents)
+    except StoreFormatError:
+        yield None
+        return
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def run_query(options: Options) -> int:
     """Search an index in either format and print ranked results."""
     try:
-        with open_index(index_path) as index:
-            return _ranked(index, query, limit, scorer)
+        with open_index(options.index) as index:
+            ranked = _rank(index, options)
+            if not ranked:
+                return _report_nothing(index, options)
+            with open_store(options.index, index.document_count) as store:
+                results = _results(index, store, options.query, ranked)
+                _report(results, options, stored=store is not None)
+            return EXIT_OK
     except (OSError, IndexFormatError, SegmentFormatError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_BAD_INPUT
 
 
-def _ranked(index: ReadableIndex, query: str, limit: int, scorer: str) -> int:
-    candidates = search(index, query)
-    ranked = (
-        SCORERS[scorer](index).rank(query, candidates, limit=limit)
-        if candidates
-        else []
+def _rank(index: ReadableIndex, options: Options) -> list[tuple[int, float]]:
+    candidates = search(index, options.query)
+    if not candidates:
+        return []
+    return SCORERS[options.scorer](index).rank(
+        options.query, candidates, limit=options.limit
     )
-    if not ranked:
+
+
+def _report_nothing(index: ReadableIndex, options: Options) -> int:
+    """Say that nothing matched, on the stream the caller is reading."""
+    if not options.as_json:
         print("no matching documents")
-        _suggest(index, query)
-        return EXIT_NO_RESULTS
-    for rank, (document_id, score) in enumerate(ranked, start=1):
-        print(f"{rank:>3}. {score:.4f}  document {document_id}")
-    return EXIT_OK
+    _suggest(index, options.query)
+    return EXIT_NO_RESULTS
+
+
+def _results(
+    index: ReadableIndex,
+    store: DocumentStore | None,
+    query: str,
+    ranked: Sequence[tuple[int, float]],
+) -> list[Result]:
+    """Pair each ranked document with its title and the passage that matched."""
+    if store is None:
+        return [Result(number, "", score, NO_PASSAGE) for number, score in ranked]
+    ordinals = {
+        document_id: ordinal
+        for ordinal, document_id in enumerate(sorted(index.document_ids))
+    }
+    return [
+        Result(
+            number,
+            store.title(ordinals[number]),
+            score,
+            extract(store.text(ordinals[number]), query),
+        )
+        for number, score in ranked
+    ]
+
+
+def _report(results: list[Result], options: Options, *, stored: bool) -> None:
+    if options.as_json:
+        _print_json(results)
+        return
+    if options.snippets and stored:
+        _print_passages(results)
+        return
+    if options.snippets:
+        print(
+            "note: this index holds no stored text, so there are no snippets",
+            file=sys.stderr,
+        )
+    _print_terse(results)
+
+
+def _print_json(results: list[Result]) -> None:
+    """Print one object per line, which is what a program should be reading.
+
+    `json.dumps` escapes every control character and every non-ASCII one, so
+    this output cannot carry an escape sequence to a terminal whatever the
+    corpus held.
+    """
+    for result in results:
+        print(
+            json.dumps(
+                {
+                    "identifier": result.identifier,
+                    "title": result.title,
+                    "score": result.score,
+                    "snippet": result.snippet.text,
+                    "highlights": [list(pair) for pair in result.snippet.highlights],
+                }
+            )
+        )
+
+
+def _print_terse(results: list[Result]) -> None:
+    """Print one line per result, with the identifier a caller wants."""
+    for rank, result in enumerate(results, start=1):
+        print(f"{rank:>3}. {result.score:.4f}  document {result.identifier}")
+
+
+def _print_passages(results: list[Result]) -> None:
+    """Print the title and the matching passage for each result."""
+    columns = _columns()
+    colour = sys.stdout.isatty()
+    for rank, result in enumerate(results, start=1):
+        if rank > 1:
+            print()
+        print(_writable(_heading(rank, result, columns)))
+        for line in _passage(result.snippet, columns, colour=colour):
+            print(_writable(line))
+
+
+def _heading(rank: int, result: Result, columns: int) -> str:
+    """Return the rank, the title and the score on one line of the terminal."""
+    room = max(columns - RANK_ROOM - SCORE_ROOM, MINIMUM_ROOM)
+    title = _display(result.title) or f"document {result.identifier}"
+    return f"{rank:>3}. {_truncate(title, room):<{room}}{result.score:>{SCORE_ROOM}.4f}"
+
+
+def _passage(snippet: Snippet, columns: int, *, colour: bool) -> list[str]:
+    """Return the passage as indented lines, with the matched words in bold."""
+    text = _display(snippet.text)
+    room = max(columns - len(INDENT), MINIMUM_ROOM)
+    lines: list[str] = []
+    for start, end in _fold(text, room):
+        piece = text[start:end]
+        if colour:
+            piece = _mark(piece, _within(snippet.highlights, start, end))
+        lines.append(INDENT + piece)
+    return lines
+
+
+def _fold(text: str, room: int) -> list[tuple[int, int]]:
+    """Return each display line as a range into the text.
+
+    Ranges rather than strings, because a highlight has to be clipped to the
+    line it falls on and `textwrap` returns the strings without the offsets.
+    Wrapping after inserting escape codes would count them towards the width.
+    """
+    lines: list[tuple[int, int]] = []
+    start = 0
+    while start < len(text):
+        if len(text) - start <= room:
+            lines.append((start, len(text)))
+            break
+        cut = text.rfind(" ", start + 1, start + room + 1)
+        end = cut if cut > start else start + room
+        lines.append((start, end))
+        start = end + 1 if text[end : end + 1] == " " else end
+    return lines
+
+
+def _within(
+    highlights: tuple[tuple[int, int], ...], start: int, end: int
+) -> list[tuple[int, int]]:
+    """Return the highlights falling on one line, clipped and made relative."""
+    return [
+        (max(left, start) - start, min(right, end) - start)
+        for left, right in highlights
+        if left < end and right > start
+    ]
+
+
+def _mark(text: str, ranges: Sequence[tuple[int, int]]) -> str:
+    """Wrap each range in bold, from the end, so earlier offsets stay valid."""
+    for left, right in reversed(ranges):
+        text = f"{text[:left]}{ANSI_BOLD}{text[left:right]}{ANSI_RESET}{text[right:]}"
+    return text
+
+
+def _truncate(text: str, room: int) -> str:
+    return text if len(text) <= room else text[: room - len(ELLIPSIS)] + ELLIPSIS
+
+
+def _display(text: str) -> str:
+    """Return text with every control character replaced by a space.
+
+    One character for one, so an escape sequence in a corpus cannot reach the
+    terminal and every highlight offset still points where it did.
+    """
+    return text.translate(_CONTROL)
+
+
+def _writable(line: str) -> str:
+    """Return a finished line the current output stream can actually encode.
+
+    A console that cannot represent a character shows its escape rather than
+    ending the process, which is what printing a title in a script the console
+    does not support would otherwise do.
+    """
+    encoding = sys.stdout.encoding or "utf-8"
+    return line.encode(encoding, "backslashreplace").decode(encoding)
+
+
+def _columns() -> int:
+    """Return the terminal width, or 80 when there is not one to ask."""
+    size = shutil.get_terminal_size(fallback=(FALLBACK_COLUMNS, 24))
+    return size.columns or FALLBACK_COLUMNS
 
 
 def _suggest(index: ReadableIndex, query: str) -> None:
@@ -188,7 +464,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command == "search":
         return run_query(
-            arguments.index, arguments.query, arguments.limit, arguments.scorer
+            Options(
+                index=arguments.index,
+                query=arguments.query,
+                limit=arguments.limit,
+                scorer=arguments.scorer,
+                snippets=not arguments.no_snippet,
+                as_json=arguments.json,
+            )
         )
     parser.print_help()
     return EXIT_OK

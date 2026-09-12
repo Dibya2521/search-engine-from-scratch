@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -10,7 +14,10 @@ import pytest
 
 from search_engine import __version__
 from search_engine.cli import (
+    ANSI_BOLD,
+    ANSI_RESET,
     DEFAULT_SCORER,
+    ELLIPSIS,
     EXIT_BAD_INPUT,
     EXIT_NO_RESULTS,
     EXIT_OK,
@@ -24,6 +31,7 @@ from tests.conftest import SAMPLE_CORPUS as FIXTURE
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import TextIO
 
 
 def test_candidates_that_all_score_zero_report_no_results(
@@ -127,7 +135,7 @@ def test_searching_ranks_the_right_document_first(
     query: str,
     expected_document: int,
 ) -> None:
-    assert main(["search", str(built_index), query]) == EXIT_OK
+    assert main(["search", str(built_index), query, "--no-snippet"]) == EXIT_OK
     first = capsys.readouterr().out.splitlines()[0]
     assert f"document {expected_document}" in first
 
@@ -135,7 +143,10 @@ def test_searching_ranks_the_right_document_first(
 def test_search_output_is_ranked_and_scored(
     built_index: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["search", str(built_index), "term frequency document"]) == EXIT_OK
+    assert (
+        main(["search", str(built_index), "term frequency document", "--no-snippet"])
+        == EXIT_OK
+    )
     lines = capsys.readouterr().out.splitlines()
     scores = [float(line.split()[1]) for line in lines]
     assert scores == sorted(scores, reverse=True)
@@ -146,7 +157,16 @@ def test_the_limit_is_respected(
     built_index: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert (
-        main(["search", str(built_index), "term index document", "--limit", "2"])
+        main(
+            [
+                "search",
+                str(built_index),
+                "term index document",
+                "--limit",
+                "2",
+                "--no-snippet",
+            ]
+        )
         == EXIT_OK
     )
     assert len(capsys.readouterr().out.splitlines()) == 2
@@ -195,7 +215,15 @@ def test_index_then_search_works_as_two_separate_processes(tmp_path: Path) -> No
     )
     assert "indexed 7 documents" in build.stdout
     query = subprocess.run(
-        [sys.executable, "-m", "search_engine.cli", "search", str(path), "computer"],
+        [
+            sys.executable,
+            "-m",
+            "search_engine.cli",
+            "search",
+            str(path),
+            "computer",
+            "--no-snippet",
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -214,6 +242,7 @@ def test_either_scorer_finds_the_right_document(
             '"computer science department"',
             "--scorer",
             scorer,
+            "--no-snippet",
         ]
     )
     assert code == EXIT_OK
@@ -333,3 +362,275 @@ def test_the_default_scorer_is_still_tfidf() -> None:
     """Neither BM25, nor proximity, nor BM25F could be shown to beat it."""
     assert DEFAULT_SCORER == "tfidf"
     assert set(SCORERS) == {"tfidf", "bm25", "bm25f"}
+
+
+# A term in every document has an inverse document frequency of zero, so a
+# one-document corpus can never produce a result. Every corpus below carries a
+# second page for that reason alone.
+OTHER_PAGE = "<page><id>99</id><title>Other</title><text>unrelated filler</text></page>"
+
+
+class Stream:
+    """A stdout that reports whatever encoding a test needs it to report.
+
+    ``sys.stdout.encoding`` is read only, so the stream has to be replaced
+    rather than adjusted. Writes go on to the stream being captured.
+    """
+
+    def __init__(self, inner: TextIO, encoding: str | None, *, terminal: bool) -> None:
+        self._inner = inner
+        self.encoding = encoding
+        self._terminal = terminal
+
+    def write(self, text: str) -> int:
+        """Pass the text on to the stream being captured."""
+        return self._inner.write(text)
+
+    def flush(self) -> None:
+        """Flush the stream being captured."""
+        self._inner.flush()
+
+    def isatty(self) -> bool:
+        """Report whatever this stand-in was told to report."""
+        return self._terminal
+
+
+def no_terminal_size(**_: object) -> os.terminal_size:
+    """Stand in for a terminal that reports no width at all."""
+    return os.terminal_size((0, 0))
+
+
+def corpus_of(tmp_path: Path, pages: str) -> Path:
+    path = tmp_path / "c.xml"
+    path.write_text(pages + OTHER_PAGE, encoding="utf-8")
+    return path
+
+
+def indexed(tmp_path: Path, pages: str, *, on_disk: bool = False) -> Path:
+    """Build an index from these page records and return its path.
+
+    The build's own line of output is swallowed, so a test asserting on the
+    first line of a search is looking at the search.
+    """
+    output = tmp_path / ("pages.seg" if on_disk else "pages.index")
+    argv = ["index", str(corpus_of(tmp_path, pages)), str(output)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert main([*argv, "--on-disk"] if on_disk else argv) == EXIT_OK
+    return output
+
+
+def test_a_result_shows_its_title_and_the_passage_that_matched(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["search", str(built_index), "inverted index", "--limit", "1"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("  1. Inverted index")
+    assert lines[0].endswith("0.6109")
+    assert "An inverted index maps each term" in " ".join(lines[1:])
+
+
+def test_the_segment_format_shows_titles_too(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both write paths store the text, so both can show it."""
+    path = indexed(
+        tmp_path,
+        "<page><id>7</id><title>Skip pointers</title>"
+        "<text>A skip pointer jumps over postings.</text></page>",
+        on_disk=True,
+    )
+    assert main(["search", str(path), "skip"]) == EXIT_OK
+    assert "Skip pointers" in capsys.readouterr().out
+
+
+def test_a_document_with_no_title_falls_back_to_its_identifier(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = indexed(tmp_path, "<page><id>9</id><text>lonely untitled page</text></page>")
+    assert main(["search", str(path), "lonely"]) == EXIT_OK
+    assert capsys.readouterr().out.startswith("  1. document 9")
+
+
+def test_matched_words_are_bold_on_a_terminal(
+    built_index: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "stdout", Stream(sys.stdout, "utf-8", terminal=True))
+    assert main(["search", str(built_index), "gardening", "--limit", "1"]) == 0
+    assert f"{ANSI_BOLD}Gardening{ANSI_RESET}" in capsys.readouterr().out
+
+
+def test_a_pipe_gets_no_escape_codes(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """This output ends up in a file, and escape codes in a file are noise."""
+    assert main(["search", str(built_index), "gardening", "--limit", "1"]) == 0
+    assert "\x1b" not in capsys.readouterr().out
+
+
+def test_json_output_parses_and_has_a_stable_key_set(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["search", str(built_index), "inverted index", "--json"]) == EXIT_OK
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert rows
+    for row in rows:
+        assert set(row) == {"identifier", "title", "score", "snippet", "highlights"}
+        assert isinstance(row["identifier"], int)
+        assert all(len(pair) == 2 for pair in row["highlights"])
+    assert rows[0]["title"] == "Inverted index"
+
+
+def test_json_output_stays_machine_readable_when_nothing_matched(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Prose on stdout would break the caller that asked for JSON."""
+    code = main(["search", str(built_index), "nonexistentword", "--json"])
+    assert code == EXIT_NO_RESULTS
+    assert capsys.readouterr().out == ""
+
+
+def test_an_escape_sequence_in_a_title_is_neutralised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A corpus is untrusted input, and a terminal acts on what it is sent."""
+    path = indexed(
+        tmp_path,
+        "<page><id>1</id><title>\x1b[31mred</title>"
+        "<text>a page about roses</text></page>",
+    )
+    assert main(["search", str(path), "roses"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "[31mred" in out
+
+
+def test_a_newline_in_the_text_does_not_break_a_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = indexed(
+        tmp_path,
+        "<page><id>1</id><title>Wrapped</title><text>alpha\nbeta</text></page>",
+    )
+    assert main(["search", str(path), "alpha"]) == EXIT_OK
+    assert capsys.readouterr().out.splitlines()[1] == "     alpha beta"
+
+
+def test_a_long_title_is_truncated_to_the_terminal(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "40")
+    path = indexed(
+        tmp_path,
+        f"<page><id>1</id><title>{'verylong ' * 10}</title>"
+        "<text>a page about roses</text></page>",
+    )
+    assert main(["search", str(path), "roses"]) == EXIT_OK
+    heading = capsys.readouterr().out.splitlines()[0]
+    assert len(heading) == 40
+    assert heading[:-8].rstrip().endswith(ELLIPSIS)
+
+
+def test_a_terminal_reporting_no_width_falls_back_to_eighty(
+    built_index: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("search_engine.cli.shutil.get_terminal_size", no_terminal_size)
+    assert main(["search", str(built_index), "inverted", "--limit", "1"]) == EXIT_OK
+    assert all(len(line) <= 80 for line in capsys.readouterr().out.splitlines())
+
+
+def test_a_character_the_console_cannot_encode_is_escaped_not_fatal(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Windows console is not UTF-8, and a title it cannot write must not kill it."""
+    path = indexed(
+        tmp_path,
+        "<page><id>1</id><title>café</title><text>a page about coffee</text></page>",
+    )
+    monkeypatch.setattr(sys, "stdout", Stream(sys.stdout, "ascii", terminal=False))
+    assert main(["search", str(path), "coffee"]) == EXIT_OK
+    assert "caf\\xe9" in capsys.readouterr().out
+
+
+def test_a_stream_reporting_no_encoding_still_prints(
+    built_index: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "stdout", Stream(sys.stdout, None, terminal=False))
+    assert main(["search", str(built_index), "inverted", "--limit", "1"]) == EXIT_OK
+    assert "Inverted index" in capsys.readouterr().out
+
+
+def test_an_index_with_no_stored_text_still_searches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What an index built before the text was stored beside it looks like."""
+    path = indexed(
+        tmp_path, "<page><id>3</id><title>Kept</title><text>alpha beta</text></page>"
+    )
+    (tmp_path / "pages.index.dat").unlink()
+    assert main(["search", str(path), "alpha"]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "1. 0.5774  document 3"
+    assert "no stored text" in captured.err
+
+
+def test_the_json_form_carries_the_snippet_and_its_ranges(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shape an HTTP layer will return, settled here so it invents nothing."""
+    assert (
+        main(["search", str(built_index), "gardening", "--json", "--limit", "1"]) == 0
+    )
+    row = json.loads(capsys.readouterr().out)
+    text = row["snippet"]
+    # Both stem to `garden`, so both are part of why the document matched.
+    assert [text[start:end] for start, end in row["highlights"]] == [
+        "Gardening",
+        "garden",
+    ]
+
+
+def test_a_passage_longer_than_the_terminal_is_wrapped(
+    built_index: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "50")
+    assert main(["search", str(built_index), "inverted index", "--limit", "1"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) > 2
+    assert all(len(line) <= 50 for line in lines)
+    assert all(line.startswith("     ") for line in lines[1:])
+
+
+def test_results_are_separated_by_a_blank_line(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two results run together are one wall of text, not a list."""
+    assert main(["search", str(built_index), "index term", "--limit", "2"]) == EXIT_OK
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("  1. ")
+    blank = lines.index("")
+    assert lines[blank + 1].startswith("  2. ")
+
+
+def test_a_document_with_no_body_shows_its_title_and_nothing_else(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The title is indexed, so a document with an empty body is still findable."""
+    path = indexed(
+        tmp_path, "<page><id>4</id><title>Bodyless page</title><text></text></page>"
+    )
+    assert main(["search", str(path), "bodyless"]) == EXIT_OK
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("  1. Bodyless page")

@@ -46,6 +46,17 @@ named, so the claim can be re-checked rather than believed.
   composes two code points into one and nothing maps an offset back across
   that. Both share their segmentation with the functions they mirror, so a
   highlighted word cannot drift away from a word that matched.
+- **`search` prints the title of each result and the passage that matched**,
+  with the matched words in bold when the output is a terminal and in plain
+  text when it is not, because output that goes into a file should not carry
+  escape codes.
+- `--no-snippet`, printing one line per result with the document identifier on
+  it, for a caller parsing the output rather than reading it.
+- `--json`, printing one object per line carrying the identifier, title, score,
+  snippet and highlight ranges. Nothing else goes to standard output in this
+  mode, so a caller that asked for JSON is never handed prose.
+- `index` writes the source text beside the index it builds, in both formats,
+  which is what the passages are cut from.
 
 ### Changed
 
@@ -53,6 +64,18 @@ named, so the claim can be re-checked rather than believed.
   have no stored text beside them, and a merge that quietly produced a segment
   without it would lose the text of everything it touched. The merge refuses and
   names the missing file. Rebuild the index.
+- **The default output of `search` has changed shape.** It was one line per
+  result carrying the document identifier; it is now the title, the score and
+  the passage. `--no-snippet` prints exactly the old form, so anything parsing
+  the output has one flag to add.
+- **A title or a passage can no longer carry an escape sequence to a terminal.**
+  A corpus is untrusted input, and every control character in it becomes a
+  space before anything is printed. A character the console cannot encode is
+  printed as its escape rather than ending the process.
+- An index built before the text was stored beside it still searches. The
+  command line says once, on stderr, that there are no snippets and falls back
+  to printing identifiers. That is deliberately gentler than the merge path,
+  where carrying on without the text would destroy it.
 
 ### Measured
 
