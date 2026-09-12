@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -37,6 +38,12 @@ if TYPE_CHECKING:
 MANIFEST_NAME: Final = "manifest.json"
 TEMPORARY_NAME: Final = "manifest.json.tmp"
 FORMAT_VERSION: Final = 1
+
+# Ten tries backing off by ten milliseconds a time, so the longest a publish
+# can wait is under half a second. Long enough to outlast a scanner holding the
+# file, short enough that a real conflict is reported rather than hidden.
+REPLACE_ATTEMPTS: Final = 10
+REPLACE_BACKOFF: Final = 0.01
 
 
 class ManifestFormatError(ValueError):
@@ -192,9 +199,34 @@ def publish(directory: Path, manifest: Manifest) -> None:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    # Path.replace is os.replace, and both are atomic on Unix and Windows
-    # alike, unlike a rename over an existing file.
-    temporary.replace(directory / MANIFEST_NAME)
+    _move_over(temporary, directory / MANIFEST_NAME)
+
+
+def _move_over(temporary: Path, target: Path) -> None:
+    """Move the new manifest onto the old one, retrying a passing refusal.
+
+    `Path.replace` is `os.replace`, which is atomic on Unix and on Windows
+    alike, unlike a rename over an existing file. What is not guaranteed is
+    being allowed to start it: on Windows the move fails outright while any
+    other process holds the destination open, and a virus scanner or a file
+    indexer holds a newly written file for a few milliseconds. Retrying does
+    not weaken the atomicity, because a move either happened or did not.
+
+    Raises:
+        PermissionError: If the destination is still held after every attempt.
+            That is a real conflict rather than a passing one, and hiding it
+            would leave a writer believing it had published.
+    """
+    for attempt in range(1, REPLACE_ATTEMPTS):
+        try:
+            temporary.replace(target)
+        except PermissionError:
+            time.sleep(REPLACE_BACKOFF * attempt)
+        else:
+            return
+    # The last attempt is made outside the loop, so its refusal is the one
+    # reported and there is no way out of the loop that does nothing.
+    temporary.replace(target)
 
 
 def _field[T](data: Mapping[str, Any], name: str, kind: type[T]) -> T:

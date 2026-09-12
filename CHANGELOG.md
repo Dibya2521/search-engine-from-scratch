@@ -142,6 +142,22 @@ named, so the claim can be re-checked rather than believed.
 - A query beyond the limits raises `QueryTooExpensiveError`, which the command
   line reports as bad input with exit code 2.
 
+### Fixed
+
+- **Publishing a manifest could fail outright on Windows.** `os.replace` is
+  atomic there as it is on Unix, but being allowed to start it is not
+  guaranteed: the move is refused while any other process holds the
+  destination open, and a virus scanner or a file indexer holds a newly
+  written file for a few milliseconds. A publish then raised `PermissionError`
+  and an accepted document went unpublished.
+
+  Observed once in six full test runs, on `manifest.json.tmp -> manifest.json`
+  at generation 11 of a directory taking one document per segment. The move is
+  now retried, backing off ten milliseconds at a time for at most ten
+  attempts, and a destination still held after that is reported rather than
+  hidden. Retrying does not weaken the atomicity, because a move either
+  happened or did not.
+
 ### Measured
 
 - Storing the text costs **4.16 times the size of the segment it sits beside**,
