@@ -70,6 +70,22 @@ named, so the claim can be re-checked rather than believed.
 - Every metric mutation takes a lock, because the serving layer will be
   concurrent and a count that is occasionally short is worse than no count: it
   is still believed.
+- **`search_engine.logs`: one line of JSON per event, and one correlation
+  identifier tying the lines of a request together.** Built on the standard
+  library's `logging` rather than beside it, so an operator configures it the
+  way they configure everything else. `json.dumps` escapes every newline,
+  quote and backslash, so a query containing any of them cannot break the
+  guarantee that one line is one record.
+- `configure(stream, level, log_queries=False)` drops the query text from
+  every record. **Logging a query is logging what a person searched for**,
+  which in most places is regulated data with a retention policy attached. The
+  switch is a filter on the handler, so the policy lives in the configuration
+  and no code that logs has to know what it is.
+- `correlated()` binds an identifier for a block, generating one when the
+  caller has none. It is a `ContextVar` rather than a thread local, because
+  that is correct under threads and coroutines alike.
+- `search --log` writes those lines to stderr. Results stay on stdout, so a
+  pipe gets one or the other and never both.
 
 ### Changed
 
@@ -97,6 +113,12 @@ named, so the claim can be re-checked rather than believed.
   small and is wrong by at most that bucket's width. An operator who does not
   know this will chase a regression that is a bucket boundary, so it is
   written in the docstring rather than left to be discovered.
+- **Nothing is logged until logging is configured.** A library that writes to
+  standard error whether or not it was asked to is one that has to be silenced
+  before it can be used.
+- **A result set is never logged**, only a line about one. It is unbounded, it
+  is the largest thing in a request, and writing it is the fastest way to fill
+  a disk.
 
 ### Measured
 

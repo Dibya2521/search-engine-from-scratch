@@ -634,3 +634,19 @@ def test_a_document_with_no_body_shows_its_title_and_nothing_else(
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 1
     assert lines[0].startswith("  1. Bodyless page")
+
+
+@pytest.mark.usefixtures("quiet_logging")
+def test_the_log_flag_writes_structured_lines_to_stderr(
+    built_index: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Results go to stdout and the trace to stderr, so a pipe gets one of them."""
+    code = main(["search", str(built_index), "gardening", "--log", "--limit", "1"])
+    assert code == EXIT_OK
+    captured = capsys.readouterr()
+    records = [json.loads(line) for line in captured.err.splitlines()]
+
+    assert {row["event"] for row in records} == {"query", "search"}
+    assert len({row["correlation_id"] for row in records}) == 1
+    assert "Gardening" in captured.out
+    assert "{" not in captured.out

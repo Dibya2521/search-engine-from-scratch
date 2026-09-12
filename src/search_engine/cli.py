@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 import sys
 from contextlib import contextmanager
@@ -31,6 +32,7 @@ from search_engine.bm25 import BM25Ranker
 from search_engine.bm25f import BM25FRanker
 from search_engine.corpus import CorpusFormatError, read
 from search_engine.index import InvertedIndex, ReadableIndex
+from search_engine.logs import configure, correlated
 from search_engine.persistence import IndexFormatError, load, save
 from search_engine.query import search
 from search_engine.ranking import BaseRanker, Ranker
@@ -75,6 +77,8 @@ ELLIPSIS: Final = "..."
 # it. An index like that is still searchable, so this is absence, not failure.
 NO_PASSAGE: Final = Snippet(text="", highlights=())
 
+LOGGER: Final = logging.getLogger("search_engine.cli")
+
 # Every C0 control, delete, and every C1 control, mapped to a space rather than
 # removed: an escape sequence must not reach the terminal, and dropping the
 # character would move every highlight offset after it.
@@ -91,6 +95,7 @@ class Options:
     scorer: str = DEFAULT_SCORER
     snippets: bool = True
     as_json: bool = False
+    logs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +145,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="print one JSON object per result and nothing else",
+    )
+    find.add_argument(
+        "--log",
+        action="store_true",
+        help="write structured logs to stderr, one JSON object per line",
     )
 
     return parser
@@ -235,7 +245,20 @@ def open_store(path: Path, documents: int) -> Generator[DocumentStore | None]:
 
 
 def run_query(options: Options) -> int:
-    """Search an index in either format and print ranked results."""
+    """Search an index in either format and print ranked results.
+
+    One correlation identifier covers the whole invocation, so every line the
+    engine writes about this search can be found from any one of them.
+    """
+    if options.logs:
+        configure(sys.stderr)
+    with correlated():
+        code = _search_and_print(options)
+        LOGGER.info("search", extra={"exit_code": code})
+        return code
+
+
+def _search_and_print(options: Options) -> int:
     try:
         with open_index(options.index) as index:
             ranked = _rank(index, options)
@@ -471,6 +494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scorer=arguments.scorer,
                 snippets=not arguments.no_snippet,
                 as_json=arguments.json,
+                logs=arguments.log,
             )
         )
     parser.print_help()

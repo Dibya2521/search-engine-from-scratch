@@ -26,6 +26,7 @@ parsed.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -56,6 +57,8 @@ QUERY_CACHE_HITS: Final = REGISTRY.counter(
 QUERY_CACHE_MISSES: Final = REGISTRY.counter(
     "query_cache_misses_total", "Query parses that had to be made."
 )
+
+LOGGER: Final = logging.getLogger("search_engine.query")
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,10 +182,15 @@ def search(
     index: ReadableIndex, text: str, synonyms: SynonymTable | None = None
 ) -> set[int]:
     """Parse and run query text in one step."""
-    return _recorded(lambda: execute(index, parse(text), synonyms))
+
+    def run() -> tuple[Query, set[int]]:
+        parsed = parse(text)
+        return parsed, execute(index, parsed, synonyms)
+
+    return _recorded(text, run)
 
 
-def _recorded(run: Callable[[], set[int]]) -> set[int]:
+def _recorded(text: str, run: Callable[[], tuple[Query, set[int]]]) -> set[int]:
     """Run one search, recording that it happened, what it cost and what it found.
 
     Both entry points funnel through here rather than one being counted and the
@@ -192,18 +200,32 @@ def _recorded(run: Callable[[], set[int]]) -> set[int]:
     Finding nothing is counted on its own because it is the cheapest proxy
     there is for relevance health. Nothing else in a running system notices
     that the engine has started answering nothing.
+
+    Parsing is inside the timing, because a caller asked for a search and does
+    not care which part of one was slow.
     """
     started = time.perf_counter()
     QUERIES.increment()
     try:
-        found = run()
+        parsed, found = run()
     except Exception:
         QUERY_ERRORS.increment()
         raise
     finally:
-        QUERY_DURATION.observe(time.perf_counter() - started)
+        elapsed = time.perf_counter() - started
+        QUERY_DURATION.observe(elapsed)
     if not found:
         QUERY_ZERO_RESULTS.increment()
+    LOGGER.info(
+        "query",
+        extra={
+            "query": text,
+            "terms": len(parsed.terms),
+            "phrase": parsed.is_phrase,
+            "candidates": len(found),
+            "duration_ms": round(elapsed * 1000, 3),
+        },
+    )
     return found
 
 
@@ -239,7 +261,12 @@ class CachedParser:
 
     def search(self, index: ReadableIndex, text: str) -> set[int]:
         """Run query text, reusing an earlier parse of the same text."""
-        return _recorded(lambda: execute(index, self.parse(text)))
+
+        def run() -> tuple[Query, set[int]]:
+            parsed = self.parse(text)
+            return parsed, execute(index, parsed)
+
+        return _recorded(text, run)
 
     @property
     def cache(self) -> LruCache[str, Query]:

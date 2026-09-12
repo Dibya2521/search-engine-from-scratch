@@ -8,16 +8,23 @@ reason no fixture here depends on another: each builds what it needs.
 
 from __future__ import annotations
 
+import io
+import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from search_engine.cli import main as cli_main
 from search_engine.index import InvertedIndex, ReadableIndex
+from search_engine.logs import LOGGER_NAME, configure
 from search_engine.ranking import Ranker
 from search_engine.segment import SegmentReader
 from search_engine.store import DocumentStore
 from search_engine.writer import IndexWriter
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 SAMPLE_CORPUS = Path(__file__).parent / "fixtures" / "sample_corpus.xml"
 
@@ -76,6 +83,34 @@ def ranking_index() -> InvertedIndex:
 def ranker() -> Ranker:
     """A ranker over a finished index, the only valid state to build one in."""
     return Ranker(build_index(RANKING_CORPUS))
+
+
+def unconfigure_logging() -> None:
+    """Return the package logger to writing nowhere.
+
+    `configure` installs a handler on a process-wide logger, so a test that did
+    not undo it would leave later tests writing into a stream nobody reads.
+    """
+    package = logging.getLogger(LOGGER_NAME)
+    for handler in list(package.handlers):
+        package.removeHandler(handler)
+    package.propagate = True
+
+
+@pytest.fixture
+def log_stream() -> Iterator[io.StringIO]:
+    """Send the package's log records here, and leave the logger as it was."""
+    stream = io.StringIO()
+    configure(stream)
+    yield stream
+    unconfigure_logging()
+
+
+@pytest.fixture
+def quiet_logging() -> Iterator[None]:
+    """Leave the package logger writing nowhere, whatever the test configured."""
+    yield
+    unconfigure_logging()
 
 
 @pytest.fixture
