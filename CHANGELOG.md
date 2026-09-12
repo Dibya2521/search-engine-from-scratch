@@ -31,6 +31,21 @@ named, so the claim can be re-checked rather than believed.
 - Merging carries the text across, renumbered into the merged segment's own
   ordinals. A document that survives a merge and loses its text has lost
   something no later pass can rebuild.
+- **`search_engine.snippet`, the passage of a document that shows why it
+  matched.** A window of 40 terms slides over the document and is scored on
+  the number of distinct query terms first and their total occurrences second,
+  so a passage showing all three query terms once beats one showing a single
+  term five times. The best window is then widened to the sentence it sits in,
+  because a passage that begins mid-sentence reads as damage rather than as an
+  extract. Highlights come back as character ranges and not as marked-up text:
+  a terminal wants ANSI codes, an HTTP response wants ranges in JSON, and a
+  test wants neither.
+- `tokenizer.tokenize_spans` and `analysis.analyze_spans`, returning each token
+  or term with the range of text it came from. **The ranges index into the
+  normalized text rather than into the original**, because normalization
+  composes two code points into one and nothing maps an offset back across
+  that. Both share their segmentation with the functions they mirror, so a
+  highlighted word cannot drift away from a word that matched.
 
 ### Changed
 

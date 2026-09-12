@@ -9,7 +9,12 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from search_engine import analysis
-from search_engine.analysis import analyze, analyze_positioned, fingerprint
+from search_engine.analysis import (
+    analyze,
+    analyze_positioned,
+    analyze_spans,
+    fingerprint,
+)
 from search_engine.index import InvertedIndex
 from search_engine.persistence import AnalyzerMismatchError, load, save
 from search_engine.stemmer import stem
@@ -221,3 +226,37 @@ def test_a_token_outside_ascii_is_never_stemmed(script: str, text: str) -> None:
 def test_ascii_tokens_are_still_stemmed() -> None:
     """The guard must not have switched stemming off for the language it fits."""
     assert analyze("running searches") == ["run", "search"]
+
+
+def test_spans_carry_the_stemmed_term_and_the_word_as_written() -> None:
+    """The term is `retriev` and the range covers `retrieval`, which is the point."""
+    text = "Ranked retrieval of documents"
+    assert analyze_spans(text) == [
+        ("rank", 0, 6),
+        ("retriev", 7, 16),
+        ("document", 20, 29),
+    ]
+
+
+def test_a_stopword_has_no_span_because_it_has_no_term() -> None:
+    assert analyze_spans("the index of terms", NO_STOPWORDS) == [
+        ("the", 0, 3),
+        ("index", 4, 9),
+        ("of", 10, 12),
+        ("term", 13, 18),
+    ]
+    assert [term for term, _, _ in analyze_spans("the index of terms")] == [
+        "index",
+        "term",
+    ]
+
+
+@given(st.text())
+def test_spans_carry_exactly_the_terms_analysis_produces(text: str) -> None:
+    """Divergence between these two would highlight words that never matched."""
+    assert [term for term, _, _ in analyze_spans(text)] == analyze(text)
+
+
+def test_adding_spans_did_not_move_the_analyzer_fingerprint() -> None:
+    """It is built from the configuration, so new code must not disturb it."""
+    assert fingerprint() == "df6570618dfe4d8b"

@@ -74,33 +74,79 @@ def tokenize(text: str, form: NormalForm = DEFAULT_FORM) -> list[str]:
     return [
         token
         for match in TOKEN_PATTERN.finditer(normalized)
-        for token in _segment(match.group())
+        for token, _ in _segment(match.group())
     ]
 
 
-def _segment(run: str) -> list[str]:
-    """Split one match into CJK bigrams and whole words, in order.
+def tokenize_spans(
+    text: str, form: NormalForm = DEFAULT_FORM
+) -> list[tuple[str, int, int]]:
+    """Return each token with the range of text it came from.
+
+    Ranges index into ``unicodedata.normalize(form, text)`` and not into
+    ``text``, because normalization composes two code points into one and
+    nothing maps an offset back across that. A caller slicing by these ranges
+    normalizes the text the same way first.
+
+    Produces the same tokens as `tokenize`, from the same code, which is the
+    only way to be sure a highlighted word is a word that matched.
+    """
+    normalized = unicodedata.normalize(form, text)
+    lowered = normalized.lower()
+    origins = _origins(normalized, lowered)
+    spans: list[tuple[str, int, int]] = []
+    for match in TOKEN_PATTERN.finditer(lowered):
+        for token, offset in _segment(match.group()):
+            start = match.start() + offset
+            spans.append((token, *_locate(origins, start, start + len(token))))
+    return spans
+
+
+def _origins(normalized: str, lowered: str) -> list[int] | None:
+    """Map each lowered position back to the character it came from.
+
+    None when lowering changed no length, which is every text not containing
+    U+0130, the one code point in Unicode whose lowercase is two characters.
+    Building the map is skipped in that case because it costs a list entry per
+    character of the document.
+    """
+    if len(lowered) == len(normalized):
+        return None
+    return [at for at, character in enumerate(normalized) for _ in character.lower()]
+
+
+def _locate(origins: list[int] | None, start: int, end: int) -> tuple[int, int]:
+    return (start, end) if origins is None else (origins[start], origins[end - 1] + 1)
+
+
+def _segment(run: str) -> list[tuple[str, int]]:
+    """Split one match into CJK bigrams and whole words, with their offsets.
 
     A match can hold both, as a product name with Latin and Japanese in it
     does, so the run is cut at every change of script rather than classified as
     a whole.
     """
-    pieces: list[str] = []
+    pieces: list[tuple[str, int]] = []
+    at = 0
     for cjk, characters in groupby(run, _is_cjk):
         piece = "".join(characters)
-        pieces.extend(_bigrams(piece) if cjk else [piece])
+        if cjk:
+            pieces.extend((bigram, at + start) for start, bigram in _bigrams(piece))
+        else:
+            pieces.append((piece, at))
+        at += len(piece)
     return pieces
 
 
-def _bigrams(run: str) -> list[str]:
+def _bigrams(run: str) -> list[tuple[int, str]]:
     """Return a run as overlapping pairs, or whole when it is a single character.
 
     Overlapping rather than partitioning, because a partition would miss any
     word straddling a pair boundary.
     """
     if len(run) < _BIGRAM:
-        return [run]
-    return [run[start : start + _BIGRAM] for start in range(len(run) - 1)]
+        return [(0, run)]
+    return [(start, run[start : start + _BIGRAM]) for start in range(len(run) - 1)]
 
 
 def _is_cjk(character: str) -> bool:

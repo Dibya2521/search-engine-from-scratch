@@ -21,7 +21,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from search_engine.tokenizer import CJK_RANGES, DEFAULT_FORM, tokenize
+from search_engine.tokenizer import (
+    CJK_RANGES,
+    DEFAULT_FORM,
+    tokenize,
+    tokenize_spans,
+)
 
 TOKEN_SHAPE = re.compile(r"[^\W_]+")
 ASCII_SHAPE = re.compile(r"[a-z0-9]+")
@@ -349,3 +354,61 @@ def test_tokenizing_distributes_over_a_separator(first: str, second: str) -> Non
 @given(st.text(alphabet=" \t\n\r!@#$%^&*()-_=+[]{};:'\",.<>/?\\|`~"))
 def test_text_with_no_ascii_alphanumerics_yields_no_tokens(text: str) -> None:
     assert tokenize(text) == []
+
+
+def test_a_span_names_the_characters_its_token_came_from() -> None:
+    text = "Ranked retrieval, and grep."
+    assert tokenize_spans(text) == [
+        ("ranked", 0, 6),
+        ("retrieval", 7, 16),
+        ("and", 18, 21),
+        ("grep", 22, 26),
+    ]
+
+
+def test_spans_index_the_normalized_text_and_not_the_original() -> None:
+    """NFC composes two code points into one, and no offset maps back across it."""
+    decomposed = "cafe\u0301 bar"
+    spans = tokenize_spans(decomposed)
+    assert spans == [("café", 0, 4), ("bar", 5, 8)]
+    normalized = unicodedata.normalize("NFC", decomposed)
+    assert normalized[0:4] == "café"
+
+
+def test_a_code_point_that_lowercases_into_two_still_maps_back() -> None:
+    """U+0130 is the only one in Unicode, and it shifts every offset after it."""
+    text = "\u0130stanbul and more"
+    spans = tokenize_spans(text)
+    assert [token for token, _, _ in spans] == ["i", "stanbul", "and", "more"]
+    assert [text[start:end] for _, start, end in spans] == [
+        "\u0130",
+        "stanbul",
+        "and",
+        "more",
+    ]
+
+
+def test_bigram_spans_overlap_the_way_the_bigrams_do() -> None:
+    spans = tokenize_spans("a \u691c\u7d22\u30a8\u30f3")
+    assert spans == [
+        ("a", 0, 1),
+        ("\u691c\u7d22", 2, 4),
+        ("\u7d22\u30a8", 3, 5),
+        ("\u30a8\u30f3", 4, 6),
+    ]
+
+
+@given(st.text())
+def test_spans_carry_exactly_the_tokens_tokenizing_produces(text: str) -> None:
+    """The two share their segmentation, and this is what proves they cannot part."""
+    assert [token for token, _, _ in tokenize_spans(text)] == tokenize(text)
+
+
+@given(st.text())
+def test_every_span_lies_inside_the_normalized_text_and_ascends(text: str) -> None:
+    normalized = unicodedata.normalize("NFC", text)
+    reached = 0
+    for _, start, end in tokenize_spans(text):
+        assert 0 <= start < end <= len(normalized)
+        assert start >= reached
+        reached = start

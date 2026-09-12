@@ -37,7 +37,12 @@ from typing import TYPE_CHECKING, Final
 
 from search_engine.stemmer import ALGORITHM_VERSION, stem
 from search_engine.stopwords import DEFAULT_STOPWORDS
-from search_engine.tokenizer import DEFAULT_FORM, TOKEN_PATTERN, tokenize
+from search_engine.tokenizer import (
+    DEFAULT_FORM,
+    TOKEN_PATTERN,
+    tokenize,
+    tokenize_spans,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Set as AbstractSet
@@ -63,6 +68,28 @@ def analyze_positioned(
     return [
         (position, _stem_english_only(token))
         for position, token in enumerate(tokenize(text, form))
+        if token not in stopwords
+    ]
+
+
+def analyze_spans(
+    text: str,
+    stopwords: AbstractSet[str] = DEFAULT_STOPWORDS,
+    form: NormalForm = DEFAULT_FORM,
+) -> list[tuple[str, int, int]]:
+    """Return surviving terms paired with the range of text each came from.
+
+    Ranges index into ``unicodedata.normalize(form, text)`` and not into
+    ``text``, because normalization composes two code points into one and
+    nothing maps an offset back across that. A caller slicing by these ranges
+    normalizes the text the same way first.
+
+    Token positions are dropped rather than returned alongside, because a
+    caller asking for characters is showing text rather than matching a phrase.
+    """
+    return [
+        (_stem_english_only(token), start, end)
+        for token, start, end in tokenize_spans(text, form)
         if token not in stopwords
     ]
 
