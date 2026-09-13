@@ -291,3 +291,6 @@ get their own terms, everything else falls back to position arithmetic.
 - **The stored text** is what a passage is cut from. Without it the engine can
   rank a document but not show one, which is the difference between a library
   and a tool.
+- **[Operations](18-operations.md)** covers what a search reports about itself
+  while it runs, and the two limits that decide whether it runs at all: the
+  cost a query is allowed, and who is allowed to see which documents.

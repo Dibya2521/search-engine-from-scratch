@@ -204,6 +204,7 @@ alternatives are.
 - [Caching](docs/15-caching.md)
 - [Unicode](docs/16-unicode.md)
 - [Query understanding](docs/17-query-understanding.md)
+- [Operations](docs/18-operations.md)
 - [ADR 0001: Toolchain and quality gates](docs/adr/0001-toolchain.md)
 - [ADR 0002: BM25 alongside TF-IDF](docs/adr/0002-bm25-alongside-tf-idf.md)
 - [ADR 0003: A compressed binary index format](docs/adr/0003-binary-index-format.md)

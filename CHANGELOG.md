@@ -99,6 +99,13 @@ named, so the claim can be re-checked rather than believed.
 - `rank`, `rank_wand` and `search_wand` take a `permit`, deciding which
   documents a caller may see. **It is consulted before a document is scored**,
   not applied to the finished list.
+- `docs/18-operations.md`, written for the person reading it at three in the
+  morning: every metric and what to do when it moves, why a histogram and not
+  a mean with the arithmetic worked through, what a quantile read from buckets
+  can and cannot tell you, the log schema and the privacy note, the query cost
+  limits, the access filtering ordering with the leak spelled out, what to
+  alert on and what not to, and a runbook for each of latency up, errors up,
+  zero results up and the merge backlog growing.
 
 ### Changed
 
