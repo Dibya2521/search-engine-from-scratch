@@ -16,6 +16,34 @@ named, so the claim can be re-checked rather than believed.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-13
+
+Results a person can read, and an engine somebody can watch.
+
+A ranked list of identifiers and scores says nothing about whether a result is
+worth opening. This release keeps the source text beside each segment and cuts
+a passage out of it showing why the document matched, so `search` prints a
+title and the words that matched rather than a number. **That costs disk: the
+whole on-disk footprint moves from 0.241 to 1.243 times the source text, a
+factor of 5.16.** The cheaper alternative, seeking back into the corpus file,
+was rejected because it makes an index depend on a file it does not own and
+cannot check.
+
+Alongside it, the three things a service needs and a script does not: metrics
+in the Prometheus text exposition format, one line of JSON per event with a
+correlation identifier tying a request together, and a cost limit on queries
+with an access filter applied before the top k is chosen. **The last two close
+defects rather than adding features.** An unbounded query did work
+proportional to the whole index, which one client could use to occupy the
+engine indefinitely; and filtering a finished result list tells the caller that
+documents they cannot see exist, which is worse still when a discarded document
+also set the threshold that pruned the ones they could have seen.
+
+**Two changes need action.** A directory written before this release has no
+text beside its segments and cannot be merged, so rebuild it. And the default
+output of `search` is a title and a passage rather than one identifier per
+line, which `--no-snippet` restores exactly.
+
 ### Added
 
 - **The source text is now kept beside each segment**, addressable by ordinal.
@@ -685,7 +713,8 @@ did not notice.
 - **Adding a document to a finished index is not possible.** The only way to add
   one is a full rebuild.
 
-[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Dibya2521/search-engine-from-scratch/compare/v0.3.0...v0.4.0
