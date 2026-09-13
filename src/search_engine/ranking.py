@@ -222,8 +222,7 @@ class BaseRanker:
             else [document_id for document_id in candidates if permit(document_id)]
         )
         # Every permitted candidate is scored, because selecting the best k
-        # consumes the whole generator. Early termination is what changes that,
-        # and it counts for itself.
+        # consumes the whole generator. Early termination counts separately.
         DOCUMENTS_SCORED.increment(len(allowed))
         weights = self.query_weights(terms)
         distinct = tuple(dict.fromkeys(terms))

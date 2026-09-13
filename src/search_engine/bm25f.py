@@ -4,8 +4,8 @@ A term in a title says more about a document than the same term in its fortieth
 paragraph. The index records which field an occurrence came from; this is the
 scorer that uses it.
 
-**The ordering is the whole content of the idea.** BM25F does not score each
-field separately and add the results. It combines the per-field frequencies
+**The ordering is what distinguishes BM25F.** It does not score each field
+separately and add the results. It combines the per-field frequencies
 first, and saturates once over the total::
 
     combined(term, doc) = sum over fields f of
@@ -25,12 +25,10 @@ before fields existed still works, and stores the title a second time under
 qualified ones. So an occurrence in the title is counted by the document field
 *and* by the title field, and a title weight of 3.0 gives a title term an
 effective weight of 4.0 against a body term's 1.0. That is a boost rather than a
-partition, it is what this index can support without a format change, and it is
-said here rather than left for a reader to deduce from a surprising number.
+partition, and it is what this index can support without a format change.
 
-**Weighting only the document field reproduces plain BM25 exactly**, which is
-the strongest correctness check available and is a property test over generated
-indexes.
+**Weighting only the document field reproduces plain BM25 exactly**, asserted
+as a property test over generated indexes.
 
 **The 3.0 title weight is the conventional starting point, not a measurement.**
 Tuning it needs a test collection whose queries are hard enough for a ranking

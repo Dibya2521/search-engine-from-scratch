@@ -2,10 +2,9 @@
 
 Run with ``uv run python benchmarks/at_scale.py``. It takes several minutes.
 
-Every scale claim this project has made so far was extrapolated from a single
-10,000 document run, and an extrapolation is a belief rather than a
-measurement. This builds indexes at six sizes and reports how build time,
-memory, vocabulary and file size actually move with the corpus.
+Earlier scale figures were extrapolated from a single 10,000 document run
+rather than measured across sizes. This builds indexes at six sizes and reports
+how build time, memory, vocabulary and file size actually move with the corpus.
 
 Two properties are reported that a single point cannot show. The first is
 whether memory per source byte is constant: if it is, the earlier projections

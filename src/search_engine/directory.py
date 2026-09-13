@@ -13,9 +13,9 @@ the directory. That is what makes a half-written segment left by a crash
 harmless rather than corrupting.
 
 The generation the directory was opened at is recorded and never changes.
-Publishing a new one leaves this reader looking at the old files, which is
-exactly what immutability is for: a query in flight cannot see a directory
-change underneath it, and a cache keyed by generation can never be stale.
+Publishing a new one leaves this reader looking at the old files, so a query in
+flight cannot see a directory change underneath it and a cache keyed by
+generation can never be stale.
 """
 
 from __future__ import annotations

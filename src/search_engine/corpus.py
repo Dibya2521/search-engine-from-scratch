@@ -66,8 +66,7 @@ class Document:
         """Return the parts worth telling apart, for a caller indexing fields.
 
         Only the title, because it is the only part of a corpus record that is
-        separately meaningful. A term in a title says more about a document than
-        the same term in its fortieth paragraph.
+        separately meaningful.
         """
         return {TITLE_FIELD: self.title}
 

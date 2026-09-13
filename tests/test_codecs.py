@@ -42,7 +42,7 @@ def test_encoding_one_number(value: int, expected: bytes) -> None:
     [(0, 1), (127, 1), (128, 2), (16_383, 2), (16_384, 3), (2_097_151, 3)],
 )
 def test_a_small_number_takes_fewer_bytes(value: int, width: int) -> None:
-    """The property the whole technique exists for."""
+    """A smaller value takes fewer bytes, which is what varbyte buys."""
     assert len(encode_number(value)) == width
 
 

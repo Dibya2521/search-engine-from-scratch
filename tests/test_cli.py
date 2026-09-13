@@ -303,7 +303,7 @@ def test_both_formats_answer_the_same_query_the_same_way(
     extra: list[str],
     scorer: str,
 ) -> None:
-    """The point of the protocol: ranking does not know which format it has."""
+    """Ranking depends on the protocol only, so the format cannot change it."""
     output = tmp_path / "index"
     assert main(["index", str(FIXTURE), str(output), *extra]) == EXIT_OK
     capsys.readouterr()
@@ -346,7 +346,7 @@ def test_a_misspelled_query_suggests_a_correction(
 def test_a_query_with_nothing_near_it_suggests_nothing(
     built_index: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A suggestion nobody asked for is worse than none."""
+    """Nothing is within edit distance, so no suggestion is offered."""
     assert main(["search", str(built_index), "zzzzzzzzzzqqq"]) == EXIT_NO_RESULTS
     assert "did you mean" not in capsys.readouterr().err
 

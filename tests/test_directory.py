@@ -29,7 +29,7 @@ TEXTS = {
 
 
 def test_a_directory_answers_the_same_as_one_index(tmp_path: Path) -> None:
-    """The whole point: many files, one set of answers."""
+    """Many files, one set of answers."""
     write_segments(tmp_path, TEXTS, buffer=2)
     expected = build_index(TEXTS)
     with DirectoryIndex(tmp_path) as index:

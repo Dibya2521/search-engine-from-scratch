@@ -146,7 +146,7 @@ def test_a_narrower_window_never_scores_lower() -> None:
 
 
 def test_the_boost_lifts_a_document_whose_terms_sit_together() -> None:
-    """The whole point, end to end through the ranker."""
+    """The boost applied end to end, through the ranker rather than alone."""
     index = InvertedIndex()
     index.add_document(1, "machine learning is the subject here")
     index.add_document(2, "machine " + "filler " * 40 + "learning")

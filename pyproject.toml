@@ -80,7 +80,7 @@ ignore = [
 # Not importable, may print, and seed a plain RNG for reproducible data.
 "benchmarks/**/*.py" = ["INP001", "S311", "T201"]
 "scripts/**/*.py" = ["INP001", "S311", "T201"]
-# A command line tool writes to stdout; that is the whole point of it.
+# A command line tool writes to stdout, so printing is not a defect here.
 "src/search_engine/cli.py" = ["T201"]
 
 [tool.ruff.lint.pydocstyle]

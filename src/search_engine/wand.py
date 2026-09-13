@@ -220,9 +220,9 @@ def search_wand(
     """Return what `rank_wand` returns, and how many documents were scored.
 
     ``permit`` is consulted before a document is scored and before it can enter
-    the results. That ordering is the whole of it: a forbidden document that
-    reached the heap would set a threshold, and pruning against a threshold set
-    by documents the caller cannot see drops documents they can.
+    the results. A forbidden document that reached the heap would set a
+    threshold, and pruning against a threshold set by documents the caller
+    cannot see drops documents they can.
 
     Raises:
         ValueError: If limit is not positive, or if the ranker applies a

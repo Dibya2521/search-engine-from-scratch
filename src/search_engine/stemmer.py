@@ -6,9 +6,8 @@ the others. Without stemming they are four unrelated terms.
 
 Five ordered steps of suffix rewriting, each gated on how many
 vowel-consonant sequences the remaining stem has. Not a dictionary lookup, so
-the output is often not a word: `relational` becomes `relat`. That is fine,
-because documents and queries pass through the same function and meet on the
-same non-word.
+the output is often not a word: `relational` becomes `relat`. Documents and
+queries pass through the same function and meet on the same non-word.
 
 Within a step, the rule with the *longest* matching suffix fires. If its
 condition fails the step makes no change; a shorter rule does not get a turn.

@@ -2,8 +2,8 @@
 
 Run with ``uv run python benchmarks/early_termination.py``.
 
-Two commits of real complexity landed on the argument that they make queries
-cheaper. This is that argument as numbers.
+Early termination is justified by making queries cheaper. This measures by how
+much, and on which query shapes it does not.
 
 Three strategies run over the same segment, with the same scorer and the same
 queries:

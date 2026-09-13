@@ -183,7 +183,7 @@ def test_empty_text_segments_to_nothing() -> None:
 
 
 def test_expansion_widens_what_a_query_matches() -> None:
-    """The whole point: a document that never says `laptop` is now found."""
+    """A document that never says `laptop` is found by a search for it."""
     index = InvertedIndex()
     index.add_document(1, "a portable notebook for travel")
     index.add_document(2, "a heavy desktop machine")

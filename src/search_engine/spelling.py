@@ -1,8 +1,8 @@
 """Suggesting corrections for a query that found nothing.
 
-A query returning nothing is the worst answer a search engine can give, and a
-misspelling is the commonest reason for it. The engine already knows every term
-it holds, so it can offer the near ones.
+A query returning nothing tells the person nothing, and a misspelling is a
+common reason for it. The engine already knows every term it holds, so it can
+offer the near ones.
 
 **The structure is a BK-tree**, a metric tree over edit distance. It works
 because Levenshtein distance obeys the triangle inequality: for any three
@@ -13,8 +13,8 @@ children whose distance from the node lies in ``[d - max, d + max]`` can hold a
 match, and every other subtree is skipped without one distance being computed
 inside it.
 
-That is the whole of the idea. A vocabulary of tens of thousands of terms is
-searched by computing a few hundred distances rather than all of them.
+So a vocabulary of tens of thousands of terms is searched by computing a few
+hundred distances rather than all of them.
 
 **The tree is built from the vocabulary, not from the postings**, so it costs
 one pass over the term dictionary and reads no postings at all. Building it is

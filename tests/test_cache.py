@@ -1,10 +1,10 @@
 """Tests for the bounded caches.
 
 The load-bearing test is `test_a_cache_never_exceeds_capacity_or_invents_values`.
-A cache that grows past its bound is a memory leak with a hit rate, and a cache
-that returns a value stored under a different key is worse than no cache at all,
-so both are checked against generated sequences of operations rather than
-against the handful of orders a unit test would think to try.
+A cache that grows past its bound leaks memory, and a cache that returns a value
+stored under a different key corrupts every answer built on it, so both are
+checked against generated sequences of operations rather than against the
+handful of orders a unit test would think to try.
 """
 
 from __future__ import annotations

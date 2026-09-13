@@ -1,8 +1,7 @@
 """The one text pipeline, shared by indexing and querying.
 
 Both paths must call this. If they ever diverge, queries produce terms the
-index never stored and the engine silently returns nothing, which is the single
-easiest way to break a search engine.
+index never stored and the engine silently returns nothing.
 
 Order is normalize, tokenize, drop stopwords, stem. Stopwords are matched on
 raw tokens because the list holds readable surface words.
@@ -26,8 +25,7 @@ Stemming is not idempotent, so this must be applied exactly once per text.
 An index records it, and loading refuses an index whose fingerprint differs from
 the current one. Without that check, changing the tokenizer, the stopword list
 or the stemmer leaves old documents analyzed one way and new queries analyzed
-another, and the engine returns wrong results with no error anywhere. It is the
-most common way a search system breaks quietly.
+another, and the engine returns wrong results with no error anywhere.
 """
 
 from __future__ import annotations

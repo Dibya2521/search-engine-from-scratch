@@ -1,7 +1,7 @@
 """Writing an index to a file and reading it back.
 
 Building an index costs roughly a minute per hundred megabytes of corpus, so
-doing it once and reloading is the difference between a usable tool and a demo.
+it is built once and reloaded rather than rebuilt per run.
 
 Two formats exist. `save` writes version 2; `load` reads either, so an index
 written by an older build still opens.
@@ -52,8 +52,8 @@ the text format was chosen, and losing it is the real cost of compression. The
 other two reasons still hold: neither format needs the whole file in memory to
 parse a record, and neither can execute code on load, which `pickle` can.
 
-No escaping is needed anywhere in version 1, and that is not luck: terms are
-maximal runs of ``[a-z0-9]``, so no delimiter can occur inside one.
+No escaping is needed anywhere in version 1, because terms are maximal runs of
+``[a-z0-9]`` and no delimiter can occur inside one.
 """
 
 from __future__ import annotations

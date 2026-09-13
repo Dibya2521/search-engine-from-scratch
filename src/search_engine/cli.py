@@ -336,7 +336,7 @@ def _report(results: list[Result], options: Options, *, stored: bool) -> None:
 
 
 def _print_json(results: list[Result]) -> None:
-    """Print one object per line, which is what a program should be reading.
+    """Print one result per line as a JSON object.
 
     `json.dumps` escapes every control character and every non-ASCII one, so
     this output cannot carry an escape sequence to a terminal whatever the

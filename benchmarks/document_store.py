@@ -7,8 +7,7 @@ text beside each segment is what makes a snippet possible, and the whole price
 of it is disk: the alternative, seeking back into the corpus file, stores no
 bytes at all and depends on a file the index does not own.
 
-That price is the entire argument against the design, so it is measured here
-rather than asserted anywhere.
+That price is the entire argument against the design, so it is measured here.
 
 The log is written without syncing. This measures the size of what is written
 and not the cost of making it durable, and one fsync per document would

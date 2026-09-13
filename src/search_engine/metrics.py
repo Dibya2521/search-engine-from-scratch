@@ -1,8 +1,7 @@
 """What the engine can be watched by.
 
 Nothing here changes an answer. It changes whether anyone can tell what the
-engine is doing while it does it, which is the difference between a program and
-a service.
+engine is doing while it does it.
 
 **A mean hides everything worth knowing.** A search averaging 20 ms can have a
 99th percentile of four seconds, and the four seconds is what a person notices
@@ -18,7 +17,7 @@ does not know it will chase a regression that is a bucket boundary.
 Every mutation takes a lock. The serving layer is concurrent, an `int += 1` is
 not atomic once the interpreter stops guaranteeing it, and a metric that is
 occasionally wrong is worse than no metric because it is believed. What the lock
-costs is measured under load rather than argued about.
+costs is measured under load.
 
 The exposition format is Prometheus text, because it is the format every
 scraper already reads and it is small enough to produce by hand. There is no
@@ -207,12 +206,11 @@ class Histogram(Metric):
     def quantile(self, q: float) -> float:
         """Return an upper bound on the value at this quantile.
 
-        An empty histogram answers 0.0 rather than raising. A monitoring path
-        that throws when nothing has happened yet is worse than one that says
-        nothing has happened.
+        An empty histogram answers 0.0 rather than raising, so a monitoring
+        path does not have to guard every read.
 
-        Infinity is the honest answer when the quantile falls above the
-        largest bucket, because the bucket has no upper bound to report.
+        Infinity is returned when the quantile falls above the largest bucket,
+        because the bucket has no upper bound to report.
 
         Raises:
             MetricError: If the quantile is outside 0 to 1.

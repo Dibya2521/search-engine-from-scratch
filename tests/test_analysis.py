@@ -73,7 +73,7 @@ def test_analysis_lowercases_splits_drops_stopwords_and_stems(
 def test_positions_are_indices_into_the_unfiltered_token_stream(
     text: str, expected: list[tuple[int, str]]
 ) -> None:
-    """The gaps are the point: they keep phrase queries honest."""
+    """A dropped stopword leaves its position empty rather than closing up."""
     assert analyze_positioned(text) == expected
 
 
@@ -229,7 +229,7 @@ def test_ascii_tokens_are_still_stemmed() -> None:
 
 
 def test_spans_carry_the_stemmed_term_and_the_word_as_written() -> None:
-    """The term is `retriev` and the range covers `retrieval`, which is the point."""
+    """The term is `retriev` while the range covers `retrieval` as written."""
     text = "Ranked retrieval of documents"
     assert analyze_spans(text) == [
         ("rank", 0, 6),

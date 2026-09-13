@@ -259,8 +259,7 @@ def test_early_termination_refuses_a_proximity_ranker(
     """It cannot reproduce a boost that depends on where terms sit.
 
     The bounds here are per term and know nothing about position, so pruning
-    would happen against one scale and scores be reported on another. Refusing
-    is the only honest answer.
+    would happen against one scale and scores be reported on another.
     """
     ranker = BM25Ranker(ranking_index, proximity=True)
     with pytest.raises(ValueError, match="cannot reproduce a proximity boost"):

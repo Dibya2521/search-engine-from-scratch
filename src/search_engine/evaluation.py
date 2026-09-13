@@ -2,16 +2,15 @@
 
 Every test elsewhere asks whether the engine does what it says. These metrics
 ask a different question: given what a human considers relevant, how well does
-the ranking agree? That is the only question a search engine is ultimately
-judged on, and no amount of passing unit tests answers it.
+the ranking agree? No test of the mechanism answers it.
 
 All three metrics need judgements, meaning a set of document identifiers a
 person has marked relevant for a query. They cannot be derived from the corpus.
 
-- **Precision@k**: of the top k results, what fraction are relevant? Punishes
-  returning rubbish.
-- **Recall@k**: of everything relevant, what fraction made the top k? Punishes
-  missing things.
+- **Precision@k**: of the top k results, what fraction are relevant? Falls when
+  irrelevant documents are returned.
+- **Recall@k**: of everything relevant, what fraction made the top k? Falls when
+  relevant documents are missed.
 - **Average precision**: precision recomputed at each relevant hit and averaged,
   which rewards ranking relevant documents *higher* rather than merely
   including them. This is the one that distinguishes two engines returning the
@@ -109,8 +108,7 @@ def reciprocal_rank(retrieved: Sequence[int], relevant: AbstractSet[int]) -> flo
     """One over the rank of the first relevant result, or 0.0 if there is none.
 
     The measure to use when a query has one right answer and the user stops
-    reading as soon as they find it. It ignores everything after the first hit,
-    which is the point rather than a limitation.
+    reading as soon as they find it. It ignores everything after the first hit.
     """
     for rank, document_id in enumerate(retrieved, start=1):
         if document_id in relevant:

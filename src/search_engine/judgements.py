@@ -2,8 +2,7 @@
 
 A judgement records that a person considered a document relevant to a query, and
 how strongly. It cannot be derived from the corpus, cannot be computed, and is
-the expensive half of retrieval evaluation in every project that does it
-honestly.
+the expensive half of retrieval evaluation.
 
 The file holds one query per line as JSON, with blank lines and lines beginning
 with ``#`` ignored so that the reasoning behind a set of labels can live beside
@@ -26,8 +25,7 @@ and being able to see a query beside its labels is what makes labelling
 reviewable.
 
 Malformed input raises rather than being skipped. A judgement file silently
-missing half its labels produces a plausible number that is wrong, which is
-worse than no number at all.
+missing half its labels produces a plausible number that is wrong.
 """
 
 from __future__ import annotations

@@ -6,21 +6,20 @@ CJK characters into overlapping bigrams.
 Normalizing comes first because one word can be written as more than one
 sequence of code points. ``cafe`` with a composed acute accent is a single
 non-ASCII code point; the same word with a combining accent is an ASCII ``e``
-followed by a mark. The two render identically and used to produce different
-tokens, so a document stored in one form could never match a query typed in the
-other.
+followed by a mark. The two render identically, so without normalizing first a
+document stored in one form could never match a query typed in the other.
 
-**Chinese, Japanese, Korean, Greek, Cyrillic, Hebrew and Arabic used to produce
-no tokens at all.** Those documents were not degraded, they were unsearchable,
-and no amount of better ranking fixes a ceiling set this far upstream.
+**The pattern matches word characters in every script, not only ASCII.** An
+ASCII-only pattern produces no tokens at all for Chinese, Japanese, Korean,
+Greek, Cyrillic, Hebrew or Arabic, which leaves those documents unsearchable
+rather than merely ranked badly.
 
 Chinese and Japanese are written without spaces, so a run of them arrives as one
 enormous token. Splitting it properly needs a dictionary and a segmentation
 model, which is a different project. Overlapping character bigrams are the
 standard cheap answer and what Lucene's CJK analyser does. They cost roughly
-twice the postings, and they match across word boundaries, so precision falls in
-exchange for recall that was previously zero. **From nothing to imperfect is the
-whole of the value.**
+twice the postings, and they match across word boundaries, so precision is
+traded for recall that an ASCII-only pattern does not provide at all.
 
 Documents and queries must both go through this function. If they diverge,
 queries produce terms the index never stored.

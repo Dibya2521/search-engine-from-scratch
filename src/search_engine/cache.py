@@ -11,15 +11,13 @@ evict each other if they shared a budget.
 | Postings | segment name, term | decoded postings | never, segments never change |
 | Results | generation, text, limit, scorer | the ranked list | never, see below |
 
-Cache invalidation is the hard half of caching, and here it does not exist. A
-segment file never changes after it is written, so an entry keyed by the segment
-it came from cannot describe something that has since moved. The manifest
-generation changes on every publish, so a result keyed by the generation it was
-computed under is never returned for a different one. **Neither cache needs an
-invalidation call, and neither can serve a stale answer.** That falls out of
-deciding that segments would be immutable, which was decided for crash recovery
-rather than for caching, and it is the clearest case in this project of a design
-decision paying off a long way from where it was made.
+No cache here needs invalidating. A segment file never changes after it is
+written, so an entry keyed by the segment it came from cannot describe something
+that has since moved. The manifest generation changes on every publish, so a
+result keyed by the generation it was computed under is never returned for a
+different one. **Neither cache needs an invalidation call, and neither can serve
+a stale answer.** That falls out of segments being immutable, which was decided
+for crash recovery rather than for caching.
 
 `functools.lru_cache` is not used for two reasons. It reports one global hit
 rate rather than one per layer, and the per-layer rate is the number that says
@@ -63,8 +61,7 @@ class LruCache[K, V]:
     """A bounded cache that evicts the least recently used entry.
 
     Hits and misses are counted because the hit rate is the only thing that says
-    whether a cache is earning the memory it holds. A cache nobody measures is
-    memory spent on faith.
+    whether a cache is earning the memory it holds.
     """
 
     __slots__ = ("_capacity", "_entries", "_hits", "_misses")

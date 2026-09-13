@@ -131,7 +131,7 @@ def test_anything_written_in_the_format_reads_back_unchanged(
 
 
 class TestTheCommittedJudgements:
-    """The judgement file is data, and data rots silently without a guard."""
+    """The judgement file is data, so it is checked against the corpus it names."""
 
     def test_every_judged_document_exists_in_the_corpus(self) -> None:
         """A judgement naming a deleted document quietly lowers every score."""
@@ -159,7 +159,7 @@ class TestTheCommittedJudgements:
         assert len(queries) == len(set(queries))
 
     def test_every_query_has_at_least_one_relevant_document(self) -> None:
-        """A query nothing answers drags every mean toward zero for free."""
+        """A query with no relevant document scores zero and lowers every mean."""
         assert all(judgement.relevant for judgement in load(JUDGEMENTS))
 
     def test_grades_stay_on_the_documented_scale(self) -> None:

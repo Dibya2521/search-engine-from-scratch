@@ -131,10 +131,10 @@ def write_corpus(articles: Iterator[Article], path: Path) -> int:
 def clean(wikitext: str) -> str:
     """Strip wikitext markup, leaving the prose a reader would see.
 
-    Not a wikitext parser, and not trying to be. The aim is to remove the
-    markup that would otherwise become tokens: templates, tables, references
-    and link syntax. What survives is close enough to article prose for
-    retrieval, and the parts it gets wrong are a small fraction of any article.
+    Not a wikitext parser. The aim is to remove the markup that would otherwise
+    become tokens: templates, tables, references and link syntax. What survives
+    is close enough to article prose for retrieval, and the parts it gets wrong
+    are a small fraction of any article.
     """
     text = _COMMENT.sub(" ", wikitext)
     text = _REFERENCE.sub(" ", text)

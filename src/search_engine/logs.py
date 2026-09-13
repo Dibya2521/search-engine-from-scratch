@@ -24,8 +24,7 @@ result, never the result.
 
 **Logging a query is logging what a person searched for.** In most places that
 is regulated data with a retention policy attached, so `configure` takes a
-switch that drops the text from every record. It is cheap to build now and
-expensive to retrofit after somebody asks for it.
+switch that drops the text from every record.
 """
 
 from __future__ import annotations

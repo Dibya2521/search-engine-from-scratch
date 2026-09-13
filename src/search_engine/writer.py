@@ -1,10 +1,10 @@
 """The write path: buffer documents, flush them as a segment, publish them.
 
-Until now the only way to add a document was to rebuild the whole index.
-`add_document` refuses an identifier it has already seen and a ranker refuses an
-index that changed under it, both deliberately, so a corpus that grows meant
-building it again from the start. At the measured 1.1 MB/s a 300 MB corpus is
-about four and a half minutes for one new document.
+`InvertedIndex` cannot be added to once it is queried: `add_document` refuses
+an identifier it has already seen and a ranker refuses an index that changed
+under it, both deliberately. Without this module a growing corpus is rebuilt
+from the start, which at the measured 1.1 MB/s is about four and a half minutes
+of a 300 MB corpus for one new document.
 
 This is the write path of a log-structured merge tree at its simplest.
 Documents accumulate in memory, and when enough have arrived they are analysed

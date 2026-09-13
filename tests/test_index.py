@@ -148,7 +148,7 @@ def test_every_term_occurrence_is_recorded_exactly_once(text: str) -> None:
 
 @given(st.text())
 def test_positions_are_stored_in_increasing_order(text: str) -> None:
-    """Positional intersection assumes this, so it is asserted rather than hoped."""
+    """Positional intersection assumes this, so it is asserted directly."""
     index = InvertedIndex()
     index.add_document(1, text)
     for term in index.terms:

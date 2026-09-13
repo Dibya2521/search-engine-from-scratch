@@ -5,11 +5,11 @@ query decides *which* documents match, and the scorer then treats every one of
 them as a bag of words, so word order changes what is returned and never how
 well it scores. A document with `machine learning` in its title is more about
 the subject than one mentioning `machine` in the first paragraph and `learning`
-in the fortieth, and until now nothing said so.
+in the fortieth.
 
 **This needs no format change.** Postings already map a document to the
 positions of a term inside it, stored for phrase queries, and the positions are
-exactly what a proximity measure needs. That is why it is cheap.
+exactly what a proximity measure needs.
 
 **The measure is the minimum window span**: the width of the smallest stretch of
 text holding at least one occurrence of every query term. Adjacent terms give a

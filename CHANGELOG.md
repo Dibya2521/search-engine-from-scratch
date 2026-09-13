@@ -148,6 +148,15 @@ named, so the claim can be re-checked rather than believed.
   the same list under any permit.
 - A query beyond the limits raises `QueryTooExpensiveError`, which the command
   line reports as bad input with exit code 2.
+- **Every docstring and comment now reads in one register.** Some modules had
+  been written plainly and others essayistically, which makes a finished
+  codebase read as unfinished. Rhetorical closers, self-congratulation,
+  superlatives no measurement supports, and prose written from the vantage of
+  the commit that introduced a module were all removed; the fact each of them
+  gestured at was kept. Two sentences that had been duplicated across modules
+  were reduced to one. No code changed: every altered `.py` file was parsed
+  before and after with its docstrings stripped, and the syntax trees are
+  identical, so the whole change is documentation.
 
 ### Fixed
 

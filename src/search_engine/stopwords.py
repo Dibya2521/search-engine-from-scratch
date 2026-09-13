@@ -6,8 +6,7 @@ is fattest.
 
 Two sources are offered. The default list is small, published and fixed, so
 behaviour is reproducible. `derive` computes a list from a real index instead,
-which is the honest way to decide what is common *in this corpus* rather than
-in English generally.
+which decides what is common *in this corpus* rather than in English generally.
 
 Filtering happens on raw tokens, before stemming, so entries here are surface
 words. Stemming first would require the list to hold stems (`wa` rather than

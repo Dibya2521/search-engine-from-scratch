@@ -76,7 +76,7 @@ def test_a_partly_quoted_query_is_not_a_phrase(text: str) -> None:
 
 
 def test_query_terms_are_stemmed_like_documents(phrase_index: InvertedIndex) -> None:
-    """`searching` finds a document that says `search`, which is the point."""
+    """`searching` finds a document that says `search`, because both stem."""
     assert search(phrase_index, "searching") == {4}
     assert search(phrase_index, "engines") == {2, 4}
 

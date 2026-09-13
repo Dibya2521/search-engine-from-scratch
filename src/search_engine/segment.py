@@ -130,7 +130,7 @@ class SegmentAnalyzerMismatchError(SegmentFormatError):
     """Raised when a segment was written by a different analysis configuration."""
 
     def __init__(self, stored: str, current: str) -> None:
-        """Name both fingerprints, since the difference is the whole problem."""
+        """Name both fingerprints, since the difference is what has to be fixed."""
         super().__init__(
             f"segment was built by analyzer {stored}, but this build is {current}"
         )
@@ -764,9 +764,8 @@ class SegmentReader:
     about.
 
     Verifying the checksum reads every page of the file and so undoes that, and
-    it is the only way to know the file is intact before trusting an answer.
-    The choice is left to the caller and its cost is recorded in the
-    documentation rather than assumed either way.
+    it is the only way to know the file is intact before trusting an answer, so
+    the choice is left to the caller.
 
     The file stays open for the life of the mapping. Closing it first works on
     Unix and fails on Windows, and a mapped file cannot be replaced or deleted
@@ -903,8 +902,7 @@ class SegmentReader:
     def postings_cache(self) -> LruCache[str, dict[int, list[int]]] | None:
         """Return the postings cache, or None when this reader caches nothing.
 
-        Exposed so a benchmark can publish the hit rate. A cache whose hit rate
-        nobody has measured is memory spent on faith.
+        Exposed so a benchmark can publish the hit rate.
         """
         return self._cache
 

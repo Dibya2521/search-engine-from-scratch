@@ -1,9 +1,8 @@
 """What has been accepted but is not yet in a segment.
 
 A document sitting in the writer's buffer exists only in memory. If the process
-dies it is gone, with no error, no log line and nothing to notice: the worst
-class of failure a data system has, because the loss is silent and can go
-unnoticed for months.
+dies it is gone, with no error, no log line and nothing to notice, so the loss
+can go unnoticed indefinitely.
 
 So a write is recorded here before it is acknowledged, and the log is discarded
 only once the documents it holds are durable in a published segment. Recovery
@@ -11,8 +10,7 @@ is replaying whatever the log still contains.
 
 **Replaying is safe because indexing is an upsert.** A crash between publishing
 a segment and discarding the log replays documents that are already indexed,
-and each one simply replaces itself. That is not luck; it is why upsert was
-built before this was.
+and each one simply replaces itself.
 
 The record format puts the length first and the checksum last:
 

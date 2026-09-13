@@ -15,8 +15,7 @@ is the thing actually being rationed.
 
 The estimate is free. Document frequency is already in each term's dictionary
 entry, put there so a scorer would not have to count postings, so summing it
-touches no postings at all. That is a decision made for one reason paying off
-somewhere else entirely, which is worth noticing.
+touches no postings at all.
 
 **A filter applied after selection is a data leak.** Where different people may
 see different documents, filtering the top k after choosing it tells the caller
@@ -62,8 +61,8 @@ def estimate_cost(index: ReadableIndex, terms: Sequence[str]) -> int:
     are counted once because the postings behind them are read once.
 
     It is an upper bound on the candidate set rather than its size: a document
-    holding two of the terms is counted twice. Bounding the work is the point,
-    and the work is done per posting.
+    holding two of the terms is counted twice. The work being rationed is per
+    posting, so an upper bound on postings is the quantity to limit.
     """
     return sum(index.document_frequency(term) for term in dict.fromkeys(terms))
 

@@ -125,7 +125,7 @@ def test_allowing_everything_is_what_no_access_control_means() -> None:
 
 
 def test_a_permit_is_applied_before_the_top_k_is_chosen() -> None:
-    """Filtering afterwards would return fewer than the limit, and the gaps talk."""
+    """Filtering afterwards returns fewer than the limit, and the gaps are visible."""
     index = build_index(skewed())
     ranker = BM25Ranker(index)
     candidates = search(index, "alpha beta")

@@ -8,7 +8,7 @@ Three query forms, distinguished by how the text is written:
   adjacent, in that order.
 
 Results are unordered. Every matching document is equally a match until
-something scores them, so a set is the honest return type.
+something scores them, so the return type is a set.
 
 A free-text query can be expanded with synonyms before it reaches the postings.
 That widens what matches, so scores shift: an expanded query matches on more
@@ -203,9 +203,8 @@ def search(
 def _recorded(text: str, run: Callable[[], tuple[Query, set[int]]]) -> set[int]:
     """Run one search, recording that it happened, what it cost and what it found.
 
-    Both entry points funnel through here rather than one being counted and the
-    other not. A metric covering some of the traffic is worse than no metric,
-    because it still looks like a number.
+    Both entry points funnel through here, so no search goes uncounted. A
+    metric covering part of the traffic still reads as a whole one.
 
     Finding nothing is counted on its own because it is the cheapest proxy
     there is for relevance health. Nothing else in a running system notices
@@ -243,9 +242,8 @@ class CachedParser:
     """Parses query text, keeping the parses it has already made.
 
     A parsed query is immutable, so handing the same one to two callers is
-    safe, and parsing is pure, so a kept parse can never be wrong. Together
-    those are the whole argument for this cache: there is no state to
-    invalidate and no way for a hit to be stale.
+    safe, and parsing is pure, so a kept parse can never be wrong. There is
+    nothing to invalidate and no way for a hit to be stale.
     """
 
     __slots__ = ("_cache",)

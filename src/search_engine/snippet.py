@@ -1,8 +1,7 @@
 """The passage of a document that shows why it matched.
 
 A list of identifiers and scores tells a person nothing about whether to open a
-result. The passage under each one is what does, and for an engine that already
-ranks well it is the largest usability gain left.
+result. The passage under each one is what does.
 
 **The passage is chosen by sliding a window over the document's terms** and
 keeping the window that shows the most of the query. Windows are scored on the

@@ -12,10 +12,10 @@ themselves. Identifiers are arbitrary and may be sparse, so a bitset over them
 could be enormous for a segment holding three documents. Ordinals are dense by
 construction, so the bitset is always one bit per document.
 
-This file is the one mutable thing in a design built on immutability. That is a
-real exception and worth naming: it never changes what a posting means, only
-whether a document is visible, so none of the properties immutability buys are
-lost. It is still replaced atomically rather than edited in place.
+This file is the one mutable thing in a design built on immutability. It never
+changes what a posting means, only whether a document is visible, so none of
+the properties immutability buys are lost, and it is still replaced atomically
+rather than edited in place.
 """
 
 from __future__ import annotations
@@ -77,9 +77,9 @@ class Tombstones:
     def write(self, path: Path) -> None:
         """Replace the tombstone file atomically.
 
-        Rewritten in place is what this is not. A reader arriving during a
-        partial write would see a bitset that is half one state and half
-        another, and would hide or reveal the wrong documents.
+        Never rewritten in place. A reader arriving during a partial write
+        would see a bitset that is half one state and half another, and would
+        hide or reveal the wrong documents.
         """
         temporary = path.with_suffix(path.suffix + ".tmp")
         with temporary.open("wb") as handle:

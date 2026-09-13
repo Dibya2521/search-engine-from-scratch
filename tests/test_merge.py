@@ -184,7 +184,7 @@ def test_segments_with_no_terms_in_common(tmp_path: Path) -> None:
 
 
 def test_merging_holds_far_less_than_building_the_index(tmp_path: Path) -> None:
-    """Streaming is the point: memory tracks the vocabulary, not the postings.
+    """Streaming means memory tracks the vocabulary, not the postings.
 
     The comparison is against the thing this design exists to avoid, which is
     materialising the merged index before writing it. Both sides are measured

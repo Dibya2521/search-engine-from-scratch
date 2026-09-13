@@ -17,8 +17,7 @@ This reports two things over whatever text is available: how many sources change
 under each form, and the individual tokens each one gains or loses. **If no text
 with the relevant characters is available, that is what it prints**, and the
 decision is then made on the conservative argument rather than on a measurement
-that did not happen. Saying which of the two occurred is the point of the
-script.
+that did not happen. The report says which of the two occurred.
 
 Every constructed case is built from explicit code points rather than written as
 a literal. These cases turn entirely on which code points are present, and a
