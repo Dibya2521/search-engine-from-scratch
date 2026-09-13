@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import io
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from hypothesis import settings
 
 from search_engine.cli import main as cli_main
 from search_engine.index import InvertedIndex, ReadableIndex
@@ -25,6 +27,17 @@ from search_engine.writer import IndexWriter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+# The heaviest property example in this suite was measured at 27.5 ms at best
+# and 197.8 ms at worst over thirty runs of identical work, against a default
+# deadline of 200 ms. A deadline that close to the spread of the machine
+# measures the machine. Two seconds is ten times the worst observed and still
+# catches an example that has gone quadratic, which is what a deadline is for.
+# A test that writes a file per example sets deadline=None for itself.
+DEADLINE = timedelta(seconds=2)
+
+settings.register_profile("project", deadline=DEADLINE)
+settings.load_profile("project")
 
 SAMPLE_CORPUS = Path(__file__).parent / "fixtures" / "sample_corpus.xml"
 
